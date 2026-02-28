@@ -1,0 +1,23 @@
+# 讯飞星辰MaaS代理GUI应用 - Python依赖
+# 安装命令: pip install -r requirements.txt
+
+# GUI框架 - PyQt5用于创建桌面界面
+PyQt5==5.15.10
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.13.0
+
+# Web框架 - Flask用于代理服务器
+Flask==3.0.0
+Werkzeug==3.0.1
+
+# OpenAI SDK - 用于调用讯飞星辰MaaS API
+openai==1.12.0
+
+# HTTP请求库
+requests==2.31.0
+
+# 打包工具 - 用于生成exe可执行文件
+PyInstaller==6.3.0
+
+# 日志彩色输出（可选，用于开发调试）
+colorlog==6.8.0
