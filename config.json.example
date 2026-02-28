@@ -1,0 +1,25 @@
+{
+  "api": {
+    "api_key": "请在此处填入你的API Key",
+    "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+    "model_id": "请在此处填入你的模型ID"
+  },
+  "proxy": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "advanced": {
+    "lora_id": "0",
+    "search_disable": true,
+    "max_tokens": 4096,
+    "temperature": 0.7
+  },
+  "app": {
+    "autostart": false,
+    "minimize_to_tray": true,
+    "log_level": "INFO",
+    "remember_window_size": true,
+    "window_width": 800,
+    "window_height": 600
+  }
+}
