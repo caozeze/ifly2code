@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 from ..config import Config, get_config
 from ..logger import ProxyLogger, get_logger
 from ..proxy.server import ProxyServer
+from .tray_icon import TrayIcon
 
 
 class LogTextEdit(QTextEdit):
@@ -97,8 +98,14 @@ class MainWindow(QMainWindow):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self._update_status)
 
+        # 系统托盘
+        self.tray_icon: Optional[TrayIcon] = None
+
         # 初始化UI
         self._init_ui()
+
+        # 初始化系统托盘
+        self._init_tray()
 
         # 连接日志信号
         self.log_signal.connect(self._on_log_message)
@@ -270,6 +277,20 @@ class MainWindow(QMainWindow):
         panel.setLayout(layout)
         return panel
 
+    def _init_tray(self) -> None:
+        """初始化系统托盘"""
+        if TrayIcon.is_system_tray_available():
+            self.tray_icon = TrayIcon(self)
+            self.tray_icon.update_status(False)
+
+            # 配置最小化到托盘
+            if self.config.get('app.minimize_to_tray', True):
+                self.setWindowFlags(
+                    self.windowFlags() | Qt.WindowCloseButtonHint
+                )
+        else:
+            self.logger.warning("系统托盘不可用")
+
     def _log_callback(self, level: str, message: str) -> None:
         """日志回调函数（从日志线程调用）
 
@@ -331,6 +352,14 @@ class MainWindow(QMainWindow):
 
             # 禁用配置编辑
             self._set_config_enabled(False)
+
+            # 更新托盘状态
+            if self.tray_icon:
+                self.tray_icon.update_status(True)
+                self.tray_icon.show_message(
+                    "代理已启动",
+                    f"监听端口: {self.port_input.value()}"
+                )
         else:
             self.logger.error("代理启动失败")
 
@@ -347,6 +376,10 @@ class MainWindow(QMainWindow):
 
         # 启用配置编辑
         self._set_config_enabled(True)
+
+        # 更新托盘状态
+        if self.tray_icon:
+            self.tray_icon.update_status(False)
 
     def _set_config_enabled(self, enabled: bool) -> None:
         """设置配置输入框是否可编辑
@@ -408,6 +441,18 @@ $env:ANTHROPIC_MODEL="{model_id}"
         Args:
             event: 关闭事件
         """
+        # 如果启用最小化到托盘，则隐藏窗口而不是退出
+        if (self.config.get('app.minimize_to_tray', True) and
+                self.tray_icon and TrayIcon.is_system_tray_available()):
+            self.hide()
+            event.ignore()
+            if self.tray_icon:
+                self.tray_icon.show_message(
+                    "最小化到托盘",
+                    "双击托盘图标可恢复窗口"
+                )
+            return
+
         # 停止代理
         if self.proxy_running:
             self._stop_proxy()
