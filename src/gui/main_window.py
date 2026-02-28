@@ -16,13 +16,14 @@ from PyQt5.QtGui import QColor, QFont, QTextCursor
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QWidget, QSpinBox,
-    QComboBox
+    QComboBox, QDialog
 )
 
 from ..config import Config, get_config
 from ..logger import ProxyLogger, get_logger
 from ..proxy.server import ProxyServer
 from .tray_icon import TrayIcon
+from .model_dialog import ModelManageDialog
 
 
 class LogTextEdit(QTextEdit):
@@ -88,6 +89,9 @@ class MainWindow(QMainWindow):
         self.config: Config = get_config()
         self.logger: ProxyLogger = get_logger()
 
+        # 当前选中的模型名称
+        self.current_model_name = self.config.get_current_model_name()
+
         # 代理服务器
         self.proxy_server: Optional[ProxyServer] = None
 
@@ -106,6 +110,9 @@ class MainWindow(QMainWindow):
 
         # 初始化系统托盘
         self._init_tray()
+
+        # 加载模型列表
+        self._load_model_list()
 
         # 连接日志信号
         self.log_signal.connect(self._on_log_message)
@@ -144,73 +151,98 @@ class MainWindow(QMainWindow):
         """
         panel = QGroupBox("📋 配置")
         layout = QVBoxLayout()
-        form_layout = QVBoxLayout()
 
-        # API Key
-        api_key_layout = QHBoxLayout()
-        api_key_label = QLabel("API Key:")
-        api_key_label.setMinimumWidth(80)
-        self.api_key_input = QLineEdit()
-        self.api_key_input.setEchoMode(QLineEdit.Password)
-        self.api_key_input.setPlaceholderText("输入讯飞星辰MaaS的API Key")
-        self.api_key_input.setText(self.config.get('api.api_key', ''))
-        api_key_layout.addWidget(api_key_label)
-        api_key_layout.addWidget(self.api_key_input)
-        form_layout.addLayout(api_key_layout)
+        # 模型选择行
+        model_select_layout = QHBoxLayout()
+        model_select_layout.addWidget(QLabel("当前模型:"))
 
-        # Base URL
-        base_url_layout = QHBoxLayout()
-        base_url_label = QLabel("Base URL:")
-        base_url_label.setMinimumWidth(80)
-        self.base_url_input = QComboBox()
-        self.base_url_input.setEditable(True)
-        self.base_url_input.addItem("https://maas-api.cn-huabei-1.xf-yun.com/v2")
-        self.base_url_input.addItem("http://maas-api.cn-huabei-1.xf-yun.com/v1")
-        current_url = self.config.get('api.base_url', '')
-        if current_url:
-            index = self.base_url_input.findText(current_url)
-            if index >= 0:
-                self.base_url_input.setCurrentIndex(index)
-            else:
-                self.base_url_input.setEditText(current_url)
-        base_url_layout.addWidget(base_url_label)
-        base_url_layout.addWidget(self.base_url_input)
-        form_layout.addLayout(base_url_layout)
+        self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(200)
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
+        model_select_layout.addWidget(self.model_combo)
 
-        # Model ID
-        model_id_layout = QHBoxLayout()
-        model_id_label = QLabel("Model ID:")
-        model_id_label.setMinimumWidth(80)
-        self.model_id_input = QLineEdit()
-        self.model_id_input.setPlaceholderText("输入模型ID，如: xopglm47blth2")
-        self.model_id_input.setText(self.config.get('api.model_id', ''))
-        model_id_layout.addWidget(model_id_label)
-        model_id_layout.addWidget(self.model_id_input)
-        form_layout.addLayout(model_id_layout)
+        self.model_manage_btn = QPushButton("⚙ 模型管理")
+        self.model_manage_btn.clicked.connect(self._open_model_manager)
+        model_select_layout.addWidget(self.model_manage_btn)
 
-        # 端口
+        model_select_layout.addStretch()
+        layout.addLayout(model_select_layout)
+
+        # 模型详情显示
+        self.model_detail_label = QLabel()
+        self.model_detail_label.setWordWrap(True)
+        self.model_detail_label.setStyleSheet("padding: 8px; background: #f5f5f5; border-radius: 4px;")
+        layout.addWidget(self.model_detail_label)
+
+        # 代理端口
         port_layout = QHBoxLayout()
-        port_label = QLabel("端口:")
-        port_label.setMinimumWidth(80)
+        port_layout.addWidget(QLabel("监听端口:"))
         self.port_input = QSpinBox()
         self.port_input.setRange(1024, 65535)
         self.port_input.setValue(self.config.get('proxy.port', 8080))
-        port_layout.addWidget(port_label)
         port_layout.addWidget(self.port_input)
         port_layout.addStretch()
-        form_layout.addLayout(port_layout)
+        layout.addLayout(port_layout)
 
-        # 保存配置按钮
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        self.save_config_btn = QPushButton("💾 保存配置")
-        self.save_config_btn.clicked.connect(self._save_config)
-        button_layout.addWidget(self.save_config_btn)
-        form_layout.addLayout(button_layout)
-
-        layout.addLayout(form_layout)
         panel.setLayout(layout)
         return panel
+
+    def _load_model_list(self) -> None:
+        """加载模型列表到下拉框"""
+        self.model_combo.clear()
+        model_names = self.config.get_model_names()
+        self.model_combo.addItems(model_names)
+
+        # 设置当前选中
+        current = self.config.get_current_model_name()
+        index = self.model_combo.findText(current)
+        if index >= 0:
+            self.model_combo.setCurrentIndex(index)
+
+        self._update_model_detail()
+
+    def _on_model_changed(self, name: str) -> None:
+        """模型选择变化事件
+
+        Args:
+            name: 新选择的模型名称
+        """
+        if name:
+            self.current_model_name = name
+            self.config.set_current_model(name)
+            self._update_model_detail()
+
+    def _update_model_detail(self) -> None:
+        """更新模型详情显示"""
+        model = self.config.get_model_by_name(self.current_model_name)
+        if model:
+            detail = f"""<b>{model.get('name', 'N/A')}</b>
+Base URL: {model.get('base_url', 'N/A')}
+Model ID: {model.get('model_id', 'N/A')}
+最大输出: {model.get('max_tokens', 4096)} tokens
+温度: {model.get('temperature', 0.7)}"""
+            self.model_detail_label.setText(detail)
+        else:
+            self.model_detail_label.setText("未选择模型")
+
+    def _open_model_manager(self) -> None:
+        """打开模型管理对话框"""
+        dialog = ModelManageDialog(self, self.current_model_name)
+        dialog.set_models(self.config.get_models())
+
+        if dialog.exec_() == QDialog.Accepted:
+            # 保存更新后的模型列表
+            updated_models = dialog.get_models()
+            selected_name = dialog.get_selected_model_name()
+
+            # 更新配置
+            self._config._config["models"] = updated_models
+            if selected_name:
+                self._config._config["current_model"] = selected_name
+
+            if self.config.save():
+                self._load_model_list()
+                self.logger.info("模型列表已更新")
 
     def _create_control_panel(self) -> QGroupBox:
         """创建控制面板
@@ -311,24 +343,17 @@ class MainWindow(QMainWindow):
         self.log_text.append_log(level, message)
 
     def _save_config(self) -> None:
-        """保存配置"""
-        # 更新配置
-        self.config.set('api.api_key', self.api_key_input.text())
-        self.config.set('api.base_url', self.base_url_input.currentText())
-        self.config.set('api.model_id', self.model_id_input.text())
+        """保存配置（仅端口）"""
         self.config.set('proxy.port', self.port_input.value())
-
-        # 保存到文件
-        if self.config.save():
-            self.logger.info("配置已保存")
-            # 重新初始化代理服务器
-            self._init_proxy_server()
-        else:
-            self.logger.error("配置保存失败")
+        self.config.save()
+        self.logger.info("配置已保存")
 
     def _init_proxy_server(self) -> None:
         """初始化代理服务器"""
-        config_data = self.config.get_all()
+        # 使用当前模型的配置
+        config_data = self.config.get_current_model_config()
+        # 覆盖代理端口配置
+        config_data['proxy']['port'] = self.port_input.value()
         self.proxy_server = ProxyServer(config_data, self.logger)
 
     def _toggle_proxy(self) -> None:
@@ -387,11 +412,9 @@ class MainWindow(QMainWindow):
         Args:
             enabled: True表示可编辑，False表示禁用
         """
-        self.api_key_input.setEnabled(enabled)
-        self.base_url_input.setEnabled(enabled)
-        self.model_id_input.setEnabled(enabled)
         self.port_input.setEnabled(enabled)
-        self.save_config_btn.setEnabled(enabled)
+        self.model_combo.setEnabled(enabled)
+        self.model_manage_btn.setEnabled(enabled)
 
     def _update_status(self) -> None:
         """更新状态显示"""
@@ -414,7 +437,8 @@ class MainWindow(QMainWindow):
     def _copy_config(self) -> None:
         """复制Claude Code配置到剪贴板"""
         port = self.port_input.value()
-        model_id = self.model_id_input.text() or "your-model-id"
+        model = self.config.get_model_by_name(self.current_model_name)
+        model_id = model.get('model_id', 'your-model-id') if model else 'your-model-id'
 
         config_text = f"""# Windows CMD
 set ANTHROPIC_BASE_URL=http://127.0.0.1:{port}
