@@ -13,8 +13,10 @@ from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QPushButton, QSpinBox, QVBoxLayout, QWidget,
-    QMessageBox
+    QMessageBox, QInputDialog
 )
+
+from .model_select_dialog import QuickModelSelectDialog
 
 
 class ModelEditDialog(QDialog):
@@ -64,9 +66,18 @@ class ModelEditDialog(QDialog):
         self.base_url_input.addItem("http://maas-api.cn-huabei-1.xf-yun.com/v1")
         basic_layout.addRow("Base URL*:", self.base_url_input)
 
+        # Model ID 输入 + 获取模型按钮
+        model_id_layout = QHBoxLayout()
         self.model_id_input = QLineEdit()
         self.model_id_input.setPlaceholderText("输入模型ID，如: xopglm47blth2")
-        basic_layout.addRow("Model ID*:", self.model_id_input)
+        model_id_layout.addWidget(self.model_id_input)
+
+        self.fetch_models_btn = QPushButton("📡 获取模型")
+        self.fetch_models_btn.setToolTip("从API获取可用模型列表")
+        self.fetch_models_btn.clicked.connect(self._fetch_models)
+        model_id_layout.addWidget(self.fetch_models_btn)
+
+        basic_layout.addRow("Model ID*:", model_id_layout)
 
         basic_group.setLayout(basic_layout)
         layout.addWidget(basic_group)
@@ -121,6 +132,32 @@ class ModelEditDialog(QDialog):
         self.search_disable_check.setChecked(self.model.get("search_disable", True))
         self.max_tokens_input.setValue(self.model.get("max_tokens", 4096))
         self.temperature_input.setValue(self.model.get("temperature", 0.7))
+
+    def _fetch_models(self) -> None:
+        """从API获取可用模型列表"""
+        # 获取API Key和Base URL
+        api_key = self.api_key_input.text().strip()
+        base_url = self.base_url_input.currentText().strip()
+
+        # 验证必填字段
+        if not api_key:
+            QMessageBox.warning(self, "提示", "请先输入API Key")
+            self.api_key_input.setFocus()
+            return
+        if not base_url:
+            QMessageBox.warning(self, "提示", "请先选择或输入Base URL")
+            self.base_url_input.setFocus()
+            return
+
+        # 打开模型选择对话框
+        dialog = QuickModelSelectDialog(api_key, base_url, self)
+        if dialog.exec_() == QDialog.Accepted:
+            model_id = dialog.get_selected_model_id()
+            if model_id:
+                self.model_id_input.setText(model_id)
+                # 如果模型名称为空，自动填充
+                if not self.name_input.text().strip():
+                    self.name_input.setText(model_id)
 
     def _save(self) -> None:
         """保存模型配置"""
