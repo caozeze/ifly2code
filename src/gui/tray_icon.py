@@ -9,9 +9,9 @@
 
 from typing import Optional, Callable
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QMenu, QSystemTrayIcon, QWidget
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor
+from PySide6.QtWidgets import QMenu, QSystemTrayIcon, QWidget, QApplication
 
 
 class TrayIcon:
@@ -108,9 +108,6 @@ class TrayIcon:
         Returns:
             QIcon实例
         """
-        from PyQt5.QtGui import QPainter, QPixmap
-        from PyQt5.QtCore import QSize
-
         pixmap = QPixmap(32, 32)
         pixmap.fill(Qt.transparent)
 
@@ -145,7 +142,11 @@ class TrayIcon:
 
     def _on_quit(self) -> None:
         """退出应用"""
-        self.window.close()
+        # 先停止代理
+        if hasattr(self.window, '_stop_proxy'):
+            self.window._stop_proxy()
+        # 强制退出（不触发 closeEvent）
+        QApplication.instance().quit()
 
     def _on_activated(self, reason) -> None:
         """托盘图标激活事件

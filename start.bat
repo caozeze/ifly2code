@@ -17,7 +17,7 @@ if errorlevel 1 (
 )
 
 REM 检查依赖是否安装
-python -c "import PyQt5" >nul 2>&1
+python -c "import PySide6" >nul 2>&1
 if errorlevel 1 (
     echo 首次运行，正在安装依赖...
     pip install -r requirements.txt
