@@ -18,7 +18,12 @@
 
 ## Introduction
 
-**ifly2code** is a local proxy service that converts [Anthropic API](https://docs.anthropic.com/) format to [OpenAI API](https://platform.openai.com/) format, enabling **Claude Code** to use various large language models from the iFlytek MaaS platform.
+**ifly2code** is a local proxy service that enables **Claude Code** to use various large language models from the iFlytek MaaS platform.
+
+**How it works:**
+- Receives Anthropic API requests from Claude Code
+- Converts to OpenAI API format and forwards to iFlytek MaaS
+- Converts responses back to Anthropic format for Claude Code
 
 ## Features
 

@@ -18,7 +18,12 @@
 
 ## 简介
 
-ifly2code 是一个本地代理服务，将 [Anthropic API](https://docs.anthropic.com/) 格式转换为 [OpenAI API](https://platform.openai.com/) 格式，使 **Claude Code** 能够使用讯飞星辰 MaaS 平台的各种大模型。
+ifly2code 是一个本地代理服务，让 **Claude Code** 能够使用讯飞星辰 MaaS 平台的各种大模型。
+
+**工作原理：**
+- 接收 Claude Code 的 Anthropic API 请求
+- 转换为 OpenAI API 格式转发到讯飞星辰
+- 将讯飞的响应转换回 Anthropic 格式返回给 Claude Code
 
 ## 功能特性
 
