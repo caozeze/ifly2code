@@ -98,7 +98,9 @@ On first run, a `config.json` configuration file will be automatically generated
 
 ### Claude Code Configuration
 
-After starting the proxy, set the following environment variables in Claude Code:
+The app **automatically updates** Claude Code configuration on startup. Manual setup is usually not required.
+
+For manual configuration or troubleshooting, you can set these environment variables:
 
 **Windows CMD:**
 ```cmd

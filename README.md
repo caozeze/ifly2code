@@ -98,7 +98,9 @@ python main.py
 
 ### Claude Code配置
 
-启动代理后，在Claude Code中设置以下环境变量：
+应用启动后会**自动更新** Claude Code 的配置文件，通常无需手动配置。
+
+如需手动配置或排查问题，可以设置以下环境变量：
 
 **Windows CMD:**
 ```cmd
