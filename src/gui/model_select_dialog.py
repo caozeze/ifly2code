@@ -8,8 +8,8 @@
 
 from typing import Any, Dict, List, Optional
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtWidgets import (
     QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QLineEdit, QMessageBox, QProgressDialog
 )
@@ -21,8 +21,8 @@ class FetchModelsThread(QThread):
     """获取模型列表的后台线程"""
 
     # 信号：成功时发送模型列表，失败时发送错误消息
-    success = pyqtSignal(list)
-    error = pyqtSignal(str)
+    success = Signal(list)
+    error = Signal(str)
 
     def __init__(self, api_key: str, base_url: str):
         """初始化线程
@@ -53,7 +53,7 @@ class ModelSelectDialog(QDialog):
     """
 
     # 信号：用户选择了模型后发送模型ID
-    model_selected = pyqtSignal(str)
+    model_selected = Signal(str)
 
     def __init__(self, parent=None):
         """初始化对话框
@@ -189,7 +189,7 @@ class ModelSelectDialog(QDialog):
 
             # 创建列表项
             item = QListWidgetItem(f"📦 {model_id}")
-            item.setData(Qt.UserRole, model_id)
+            item.setData(Qt.UserRole, str(model_id))
             self.model_list.addItem(item)
             count += 1
 

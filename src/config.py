@@ -8,7 +8,7 @@
 """
 
 import json
-import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -34,24 +34,59 @@ class Config:
         "max_tokens": 4096,
         "temperature": 0.7,
         "lora_id": "0",
-        "search_disable": True
+        "search_disable": True,
+        "enable_thinking": False
     }
 
     # 默认配置
     DEFAULT_CONFIG: Dict[str, Any] = {
         "models": [
             {
+                "name": "Kimi K2.5",
+                "api_key": "",
+                "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+                "model_id": "xopkimik25",
+                "max_tokens": 32768,
+                "temperature": 0.7,
+                "lora_id": "0",
+                "search_disable": True,
+                "enable_thinking": False
+            },
+            {
+                "name": "GLM5",
+                "api_key": "",
+                "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+                "model_id": "xopglm5",
+                "max_tokens": 32768,
+                "temperature": 0.7,
+                "lora_id": "0",
+                "search_disable": True,
+                "enable_thinking": False
+            },
+            {
+                "name": "Minimax M2.5",
+                "api_key": "",
+                "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+                "model_id": "xminimaxm25",
+                "max_tokens": 32768,
+                "temperature": 0.7,
+                "lora_id": "0",
+                "search_disable": True,
+                "enable_thinking": False
+            },
+            {
                 "name": "讯飞星辰模型",
                 "api_key": "",
                 "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
-                "model_id": "",
-                "max_tokens": 4096,
+                "model_id": "customize",
+                "max_tokens": 32768,
                 "temperature": 0.7,
                 "lora_id": "0",
-                "search_disable": True
+                "search_disable": True,
+                "enable_thinking": False
             }
         ],
-        "current_model": "讯飞星辰模型",
+        "current_model": "Kimi K2.5",
         "proxy": {
             "host": "127.0.0.1",
             "port": 8080
@@ -61,8 +96,8 @@ class Config:
             "minimize_to_tray": True,
             "log_level": "INFO",
             "remember_window_size": True,
-            "window_width": 800,
-            "window_height": 600
+            "window_width": 500,
+            "window_height": 700
         }
     }
 
@@ -70,11 +105,16 @@ class Config:
         """初始化配置管理器
 
         Args:
-            config_path: 配置文件路径，默认为项目目录下的 config.json
+            config_path: 配置文件路径，默认为 exe 所在目录或项目目录下的 config.json
         """
         if config_path is None:
-            # 默认路径：项目目录下的 config.json
-            self.config_path = Path(__file__).parent.parent / "config.json"
+            # 检测是否为 PyInstaller 打包环境
+            if getattr(sys, 'frozen', False):
+                # 打包后：使用 exe 所在目录
+                self.config_path = Path(sys.executable).parent / "config.json"
+            else:
+                # 开发环境：使用项目目录
+                self.config_path = Path(__file__).parent.parent / "config.json"
         else:
             self.config_path = Path(config_path)
 
@@ -133,7 +173,8 @@ class Config:
                     "max_tokens": advanced.get("max_tokens", 4096),
                     "temperature": advanced.get("temperature", 0.7),
                     "lora_id": advanced.get("lora_id", "0"),
-                    "search_disable": advanced.get("search_disable", True)
+                    "search_disable": advanced.get("search_disable", True),
+                    "enable_thinking": False
                 }
             ],
             "current_model": "迁移的模型",
@@ -317,9 +358,10 @@ class Config:
                 "lora_id": model.get("lora_id", "0"),
                 "search_disable": model.get("search_disable", True),
                 "max_tokens": model.get("max_tokens", 4096),
-                "temperature": model.get("temperature", 0.7)
+                "temperature": model.get("temperature", 0.7),
+                "enable_thinking": model.get("enable_thinking", False)
             },
-            "proxy": self._config.get("proxy", {"host": "127.0.0.1", "port": 8080})
+            "proxy": self._config.get("proxy", {"host": "127.0.0.1", "port": 8080}).copy()
         }
 
     def add_model(self, model: Dict[str, Any]) -> bool:
@@ -402,6 +444,29 @@ class Config:
                 return self.save()
 
         return False
+
+    def set_models(self, models: List[Dict[str, Any]]) -> bool:
+        """直接设置模型列表（替换现有所有模型）
+
+        Args:
+            models: 新的模型列表
+
+        Returns:
+            设置成功返回 True
+        """
+        if not models:
+            return False
+
+        import copy
+        self._config["models"] = copy.deepcopy(models)
+
+        # 确保 current_model 有效
+        current = self._config.get("current_model", "")
+        model_names = [m.get("name", "") for m in models]
+        if current not in model_names and model_names:
+            self._config["current_model"] = model_names[0]
+
+        return self.save()
 
 
 # 全局配置实例（单例模式）

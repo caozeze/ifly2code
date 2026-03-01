@@ -29,11 +29,11 @@ class APIConverter:
     EVENT_ERROR = "error"
 
     @staticmethod
-    def anthropic_to_openai_messages(anthropic_messages: List[Dict]) -> List[Dict[str, str]]:
+    def anthropic_to_openai_messages(anthropic_messages: List[Dict]) -> List[Dict[str, Any]]:
         """将Anthropic消息格式转换为OpenAI格式
 
-        Anthropic格式的content可以是字符串或数组（包含text和image等类型）。
-        OpenAI格式使用简单的role/content结构。
+        Anthropic格式的content可以是字符串或数组（包含text、tool_use、tool_result等类型）。
+        OpenAI格式使用简单的role/content结构，工具调用使用tool_calls和role:tool。
 
         Args:
             anthropic_messages: Anthropic格式的消息列表
@@ -45,8 +45,8 @@ class APIConverter:
             输入: [{"role": "user", "content": "你好"}]
             输出: [{"role": "user", "content": "你好"}]
 
-            输入: [{"role": "user", "content": [{"type": "text", "text": "你好"}]}]
-            输出: [{"role": "user", "content": "你好"}]
+            工具调用输入: [{"role": "assistant", "content": [{"type": "tool_use", "name": "bash", ...}]}]
+            工具调用输出: [{"role": "assistant", "content": "", "tool_calls": [...]}]
         """
         openai_messages = []
 
@@ -59,26 +59,126 @@ class APIConverter:
                 openai_messages.append({"role": role, "content": content})
 
             elif isinstance(content, list):
-                # 数组格式内容（可能包含text、image等类型）
-                text_parts = []
-                for part in content:
-                    if part.get('type') == 'text':
-                        text_parts.append(part.get('text', ''))
-                    # 暂时忽略其他类型（如image）
-                if text_parts:
+                # 数组格式内容 - 需要特殊处理 tool_use
+                # 检查是否有 tool_use
+                has_tool_use = any(p.get('type') == 'tool_use' for p in content)
+
+                if has_tool_use:
+                    # 如果有 tool_use，将所有内容合并到一条 assistant 消息中
+                    # OpenAI 格式：assistant 消息可以同时有 content 和 tool_calls
+                    text_parts = []
+                    tool_calls = []
+
+                    for part in content:
+                        part_type = part.get('type')
+
+                        if part_type == 'text':
+                            text_parts.append(part.get('text', ''))
+                        elif part_type == 'tool_use':
+                            tool_call = {
+                                "id": part.get('id', f"call_{len(openai_messages)}"),
+                                "type": "function",
+                                "function": {
+                                    "name": part.get('name', ''),
+                                    "arguments": json.dumps(part.get('input', {}), ensure_ascii=False)
+                                }
+                            }
+                            tool_calls.append(tool_call)
+
+                    # 创建一条 assistant 消息，同时包含 content 和 tool_calls
                     openai_messages.append({
-                        "role": role,
-                        "content": ''.join(text_parts)
+                        "role": "assistant",
+                        "content": ''.join(text_parts),
+                        "tool_calls": tool_calls
                     })
+
+                    # 处理 tool_result（如果有的话）
+                    for part in content:
+                        if part.get('type') == 'tool_result':
+                            tool_use_id = part.get('tool_use_id', '')
+                            result_content = part.get('content', '')
+
+                            if isinstance(result_content, list):
+                                result_content = json.dumps(result_content, ensure_ascii=False)
+                            elif result_content is None:
+                                result_content = ""
+
+                            openai_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_use_id,
+                                "content": str(result_content)
+                            })
                 else:
-                    # 如果没有text部分，添加空内容
-                    openai_messages.append({"role": role, "content": ""})
+                    # 没有 tool_use，正常处理 text 和 tool_result
+                    for part in content:
+                        part_type = part.get('type')
+
+                        if part_type == 'text':
+                            openai_messages.append({
+                                "role": role,
+                                "content": part.get('text', '')
+                            })
+                        elif part_type == 'tool_result':
+                            tool_use_id = part.get('tool_use_id', '')
+                            result_content = part.get('content', '')
+
+                            if isinstance(result_content, list):
+                                result_content = json.dumps(result_content, ensure_ascii=False)
+                            elif result_content is None:
+                                result_content = ""
+
+                            openai_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_use_id,
+                                "content": str(result_content)
+                            })
 
             else:
                 # 其他情况，添加默认内容
                 openai_messages.append({"role": role, "content": ""})
 
         return openai_messages
+
+    @staticmethod
+    def anthropic_to_openai_tools(anthropic_tools: List[Dict]) -> List[Dict]:
+        """将 Anthropic tools 格式转换为 OpenAI 格式
+
+        Anthropic 格式:
+        {
+            "name": "bash",
+            "description": "...",
+            "input_schema": {...}
+        }
+
+        OpenAI 格式:
+        {
+            "type": "function",
+            "function": {
+                "name": "bash",
+                "description": "...",
+                "parameters": {...}
+            }
+        }
+
+        Args:
+            anthropic_tools: Anthropic格式的工具定义列表
+
+        Returns:
+            OpenAI格式的工具定义列表
+        """
+        openai_tools = []
+
+        for tool in anthropic_tools:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool.get('name', ''),
+                    "description": tool.get('description', ''),
+                    "parameters": tool.get('input_schema', {})
+                }
+            })
+
+        return openai_tools
 
     @staticmethod
     def openai_to_anthropic_response(
@@ -169,7 +269,9 @@ class APIConverter:
 
     @staticmethod
     def create_stream_start_events(message_id: str, model_id: str) -> str:
-        """创建流式响应的开始事件
+        """创建流式响应的开始事件（只包含 message_start）
+
+        注意：content_block_start 事件将在实际内容到达时动态创建
 
         Args:
             message_id: 消息ID
@@ -196,15 +298,8 @@ class APIConverter:
             APIConverter.EVENT_MESSAGE_START, message_start_data
         ))
 
-        # content_block_start 事件
-        content_block_start_data = {
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""}
-        }
-        events.append(APIConverter.create_sse_event(
-            APIConverter.EVENT_CONTENT_BLOCK_START, content_block_start_data
-        ))
+        # 注意：不在这里创建 content_block_start
+        # 它将在 generate() 中根据实际内容类型（text 或 tool_use）动态创建
 
         return "".join(events)
 
@@ -229,29 +324,28 @@ class APIConverter:
         )
 
     @staticmethod
-    def create_stream_end_events(output_tokens: int = 0) -> str:
+    def create_stream_end_events(output_tokens: int = 0, stop_reason: str = "end_turn") -> str:
         """创建流式响应的结束事件
+
+        注意：content_block_stop 应该在 generate() 中根据实际 index 发送
 
         Args:
             output_tokens: 输出token数量
+            stop_reason: 停止原因（"end_turn" 或 "tool_use"）
 
         Returns:
             SSE格式的事件字符串
         """
         events = []
 
-        # content_block_stop 事件
-        events.append(APIConverter.create_sse_event(
-            APIConverter.EVENT_CONTENT_BLOCK_STOP,
-            {"type": "content_block_stop", "index": 0}
-        ))
+        # content_block_stop 事件已在 generate() 中根据实际 index 发送，不在这里重复
 
-        # message_delta 事件
+        # message_delta 事件 - 使用动态 stop_reason
         events.append(APIConverter.create_sse_event(
             APIConverter.EVENT_MESSAGE_DELTA,
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None},
                 "usage": {"output_tokens": output_tokens}
             }
         ))
@@ -263,6 +357,85 @@ class APIConverter:
         ))
 
         return "".join(events)
+
+    @staticmethod
+    def create_tool_use_start_event(index: int, tool_id: str, tool_name: str) -> str:
+        """创建 tool_use 开始事件
+
+        Args:
+            index: 内容块索引
+            tool_id: 工具调用ID
+            tool_name: 工具名称
+
+        Returns:
+            SSE格式的事件字符串
+        """
+        data = {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {
+                "type": "tool_use",
+                "id": tool_id,
+                "name": tool_name,
+                "input": {}
+            }
+        }
+        return APIConverter.create_sse_event(APIConverter.EVENT_CONTENT_BLOCK_START, data)
+
+    @staticmethod
+    def create_tool_use_delta_event(index: int, partial_json: str) -> str:
+        """创建 tool_use 参数增量事件
+
+        Args:
+            index: 内容块索引
+            partial_json: 累积的JSON参数字符串
+
+        Returns:
+            SSE格式的事件字符串
+        """
+        data = {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": partial_json}
+        }
+        return APIConverter.create_sse_event(APIConverter.EVENT_CONTENT_BLOCK_DELTA, data)
+
+    @staticmethod
+    def create_content_block_stop_event(index: int) -> str:
+        """创建内容块停止事件
+
+        Args:
+            index: 内容块索引
+
+        Returns:
+            SSE格式的事件字符串
+        """
+        data = {"type": "content_block_stop", "index": index}
+        return APIConverter.create_sse_event(APIConverter.EVENT_CONTENT_BLOCK_STOP, data)
+
+    @staticmethod
+    def create_final_tool_use_input_event(index: int, full_input: dict) -> str:
+        """创建最终的 tool_use input 事件
+
+        在 stream 结束时发送，确保完整的 input 被正确传递给客户端。
+        这是为了解决某些客户端可能无法正确累积 input_json_delta 的问题。
+
+        Args:
+            index: 内容块索引
+            full_input: 完整的工具输入参数（已解析的 dict）
+
+        Returns:
+            SSE格式的事件字符串
+        """
+        import json
+        # 将完整的 input 作为 JSON 字符串发送
+        input_json = json.dumps(full_input, ensure_ascii=False)
+        data = {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": input_json}
+        }
+        return APIConverter.create_sse_event(APIConverter.EVENT_CONTENT_BLOCK_DELTA, data)
 
     @staticmethod
     def create_error_event(error_message: str) -> str:
@@ -296,10 +469,6 @@ class APIConverter:
         messages = request_data.get('messages', [])
         stream = request_data.get('stream', False)
         max_tokens = request_data.get('max_tokens', 4096)
-
-        # 限制max_tokens
-        if max_tokens > 16384:
-            max_tokens = 16384
 
         temperature = request_data.get('temperature', 0.7)
 

@@ -67,7 +67,7 @@ class IflyMaaSClient:
             models = []
             for model in response.data:
                 models.append({
-                    "id": model.id,
+                    "id": str(model.id),
                     "created": getattr(model, "created", 0),
                     "object": getattr(model, "object", "model")
                 })

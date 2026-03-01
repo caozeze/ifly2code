@@ -4,26 +4,38 @@
 GUI主窗口模块
 
 提供应用的主界面，包括配置面板、控制面板和日志面板。
-使用PyQt5实现，支持中文界面和系统托盘集成。
+使用PySide6实现，支持中文界面和系统托盘集成。
 """
 
 import json
 import sys
 from typing import Optional
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QTextCursor
-from PyQt5.QtWidgets import (
-    QApplication, QCheckBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QWidget, QSpinBox,
-    QComboBox, QDialog
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QTextCursor
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..config import Config, get_config
 from ..logger import ProxyLogger, get_logger
 from ..proxy.server import ProxyServer
-from .tray_icon import TrayIcon
 from .model_dialog import ModelManageDialog
+from .tray_icon import TrayIcon
 
 
 class LogTextEdit(QTextEdit):
@@ -79,7 +91,7 @@ class MainWindow(QMainWindow):
     """
 
     # 定义日志信号
-    log_signal = pyqtSignal(str, str)
+    log_signal = Signal(str, str)
 
     def __init__(self):
         """初始化主窗口"""
@@ -121,12 +133,12 @@ class MainWindow(QMainWindow):
     def _init_ui(self) -> None:
         """初始化用户界面"""
         self.setWindowTitle("讯飞星辰 MaaS 代理服务")
-        self.setMinimumSize(700, 600)
+        self.setMinimumSize(420, 560)
 
         # 从配置恢复窗口大小
         if self.config.get('app.remember_window_size', True):
-            width = self.config.get('app.window_width', 800)
-            height = self.config.get('app.window_height', 600)
+            width = self.config.get('app.window_width', 500)
+            height = self.config.get('app.window_height', 700)
             self.resize(width, height)
 
         # 创建中央部件
@@ -142,6 +154,12 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self._create_config_panel())
         main_layout.addWidget(self._create_control_panel())
         main_layout.addWidget(self._create_log_panel(), stretch=1)
+
+        # 添加署名标签
+        credit_label = QLabel("Powered by zecao")
+        credit_label.setAlignment(Qt.AlignRight)
+        credit_label.setStyleSheet("color: #888; font-size: 11px; padding: 5px;")
+        main_layout.addWidget(credit_label)
 
     def _create_config_panel(self) -> QGroupBox:
         """创建配置面板
@@ -211,6 +229,21 @@ class MainWindow(QMainWindow):
             self.current_model_name = name
             self.config.set_current_model(name)
             self._update_model_detail()
+            # 自动更新 Claude Code 配置
+            self._update_claude_settings()
+
+            # 如果代理正在运行，提示用户重启
+            if self.proxy_running:
+                reply = QMessageBox.question(
+                    self,
+                    "模型已切换",
+                    "模型已切换，需要重启代理才能生效。\n是否立即重启代理？",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if reply == QMessageBox.Yes:
+                    self._stop_proxy()
+                    self._start_proxy()
 
     def _update_model_detail(self) -> None:
         """更新模型详情显示"""
@@ -236,11 +269,9 @@ Model ID: {model.get('model_id', 'N/A')}
             selected_name = dialog.get_selected_model_name()
 
             # 更新配置
-            self._config._config["models"] = updated_models
+            self.config.set_models(updated_models)
             if selected_name:
-                self._config._config["current_model"] = selected_name
-
-            if self.config.save():
+                self.config.set_current_model(selected_name)
                 self._load_model_list()
                 self.logger.info("模型列表已更新")
 
@@ -375,6 +406,9 @@ Model ID: {model.get('model_id', 'N/A')}
             self.status_label.setStyleSheet("color: green;")
             self.update_timer.start(1000)  # 每秒更新一次
 
+            # 获取实际使用的端口
+            actual_port = self.proxy_server.actual_port or self.port_input.value()
+
             # 禁用配置编辑
             self._set_config_enabled(False)
 
@@ -383,8 +417,11 @@ Model ID: {model.get('model_id', 'N/A')}
                 self.tray_icon.update_status(True)
                 self.tray_icon.show_message(
                     "代理已启动",
-                    f"监听端口: {self.port_input.value()}"
+                    f"监听端口: {actual_port}"
                 )
+
+            # 用实际端口更新 Claude Code 配置
+            self._update_claude_settings_with_port(actual_port)
         else:
             self.logger.error("代理启动失败")
 
@@ -455,9 +492,101 @@ $env:ANTHROPIC_MODEL="{model_id}"
         clipboard.setText(config_text)
         self.logger.info("配置已复制到剪贴板")
 
+    def _update_claude_settings(self) -> None:
+        """自动更新 Claude Code 的 settings.json
+
+        同步 api_key、base_url、model_id 到 Claude Code 配置
+        """
+        from pathlib import Path
+
+        model = self.config.get_model_by_name(self.current_model_name)
+        if not model:
+            return
+
+        api_key = model.get('api_key', '')
+        base_url = model.get('base_url', '')
+        model_id = model.get('model_id', '')
+
+        # Claude Code settings.json 路径
+        settings_path = Path.home() / '.claude' / 'settings.json'
+
+        try:
+            # 读取现有配置
+            settings = {}
+            if settings_path.exists():
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+
+            # 确保 env 字段存在
+            if 'env' not in settings:
+                settings['env'] = {}
+
+            # 同步配置（保留用户原有的其他配置）
+            # 注意：Claude Code 只使用 ANTHROPIC_AUTH_TOKEN，不需要 ANTHROPIC_API_KEY
+            # ANTHROPIC_BASE_URL 应该指向本地代理，而不是讯飞 API
+            proxy_port = self.port_input.value()
+            settings['env']['ANTHROPIC_BASE_URL'] = f"http://127.0.0.1:{proxy_port}"
+            settings['env']['ANTHROPIC_AUTH_TOKEN'] = api_key
+            settings['env']['ANTHROPIC_MODEL'] = model_id
+            settings['env']['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = model_id
+            settings['env']['ANTHROPIC_DEFAULT_SONNET_MODEL'] = model_id
+            settings['env']['ANTHROPIC_DEFAULT_OPUS_MODEL'] = model_id
+
+            # 写入
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+
+            self.logger.info(f"已更新 Claude Code 配置: {settings_path}")
+        except Exception as e:
+            self.logger.warning(f"更新 Claude Code 配置失败: {e}")
+
     def _clear_log(self) -> None:
         """清空日志"""
         self.log_text.clear()
+
+    def _update_claude_settings_with_port(self, port: int) -> None:
+        """使用指定端口更新 Claude Code 的 settings.json
+
+        Args:
+            port: 实际使用的端口号
+        """
+        from pathlib import Path
+
+        model = self.config.get_model_by_name(self.current_model_name)
+        if not model:
+            return
+
+        api_key = model.get('api_key', '')
+        model_id = model.get('model_id', '')
+
+        # Claude Code settings.json 路径
+        settings_path = Path.home() / '.claude' / 'settings.json'
+
+        try:
+            # 读取现有配置
+            settings = {}
+            if settings_path.exists():
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+
+            # 确保 env 字段存在
+            if 'env' not in settings:
+                settings['env'] = {}
+
+            # 同步配置（使用实际端口）
+            settings['env']['ANTHROPIC_BASE_URL'] = f"http://127.0.0.1:{port}"
+            settings['env']['ANTHROPIC_AUTH_TOKEN'] = api_key
+            settings['env']['ANTHROPIC_MODEL'] = model_id
+
+            # 写入
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+
+            self.logger.info(f"已更新 Claude Code 配置 (端口 {port}): {settings_path}")
+        except Exception as e:
+            self.logger.warning(f"更新 Claude Code 配置失败: {e}")
 
     def closeEvent(self, event) -> None:
         """窗口关闭事件

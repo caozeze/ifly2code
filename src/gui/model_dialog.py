@@ -8,15 +8,13 @@
 
 from typing import Any, Dict, List, Optional
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QPushButton, QSpinBox, QVBoxLayout, QWidget,
     QMessageBox, QInputDialog
 )
-
-from .model_select_dialog import QuickModelSelectDialog
 
 
 class ModelEditDialog(QDialog):
@@ -66,18 +64,20 @@ class ModelEditDialog(QDialog):
         self.base_url_input.addItem("http://maas-api.cn-huabei-1.xf-yun.com/v1")
         basic_layout.addRow("Base URL*:", self.base_url_input)
 
-        # Model ID 输入 + 获取模型按钮
-        model_id_layout = QHBoxLayout()
-        self.model_id_input = QLineEdit()
-        self.model_id_input.setPlaceholderText("输入模型ID，如: xopglm47blth2")
-        model_id_layout.addWidget(self.model_id_input)
-
-        self.fetch_models_btn = QPushButton("📡 获取模型")
-        self.fetch_models_btn.setToolTip("从API获取可用模型列表")
-        self.fetch_models_btn.clicked.connect(self._fetch_models)
-        model_id_layout.addWidget(self.fetch_models_btn)
-
-        basic_layout.addRow("Model ID*:", model_id_layout)
+        # Model ID 输入（下拉框 + 可编辑）
+        self.model_id_input = QComboBox()
+        self.model_id_input.setEditable(True)
+        # 预设常用模型
+        preset_models = [
+            "xopkimik25",      # Kimi
+            "xopglm5",         # ChatGLM
+            "xminimaxm25",     # MiniMax
+            "xopqwen35397b",   # Qwen
+        ]
+        self.model_id_input.addItems(preset_models)
+        self.model_id_input.setPlaceholderText("请选择或输入模型ID")
+        self.model_id_input.setToolTip("模型ID需要从讯飞星辰MaaS平台获取")
+        basic_layout.addRow("Model ID*:", self.model_id_input)
 
         basic_group.setLayout(basic_layout)
         layout.addWidget(basic_group)
@@ -94,10 +94,18 @@ class ModelEditDialog(QDialog):
         self.search_disable_check.setChecked(True)
         advanced_layout.addRow("", self.search_disable_check)
 
-        self.max_tokens_input = QSpinBox()
-        self.max_tokens_input.setRange(1, 32768)
-        self.max_tokens_input.setValue(4096)
-        self.max_tokens_input.setSuffix(" tokens")
+        self.enable_thinking_check = QCheckBox("开启深度思考模式")
+        self.enable_thinking_check.setChecked(False)
+        self.enable_thinking_check.setToolTip("仅部分模型支持，开启后模型会进行更深入的推理思考")
+        advanced_layout.addRow("", self.enable_thinking_check)
+
+        # 最大输出（下拉框 + 可编辑）
+        self.max_tokens_input = QComboBox()
+        self.max_tokens_input.setEditable(True)
+        preset_tokens = ["512", "1024", "2048", "4096", "8192", "16384", "32768", "65536", "131072"]
+        self.max_tokens_input.addItems(preset_tokens)
+        self.max_tokens_input.setCurrentText("32768")  # 默认值
+        self.max_tokens_input.setPlaceholderText("最大输出 tokens 数")
         advanced_layout.addRow("最大输出:", self.max_tokens_input)
 
         self.temperature_input = QDoubleSpinBox()
@@ -127,37 +135,19 @@ class ModelEditDialog(QDialog):
         self.name_input.setText(self.model.get("name", ""))
         self.api_key_input.setText(self.model.get("api_key", ""))
         self.base_url_input.setEditText(self.model.get("base_url", ""))
-        self.model_id_input.setText(self.model.get("model_id", ""))
+        # Model ID - 如果值在预设中则选中，否则显示在编辑框
+        model_id = self.model.get("model_id", "")
+        if model_id:
+            self.model_id_input.setEditText(model_id)
+        # LoRA ID
         self.lora_id_input.setText(self.model.get("lora_id", "0"))
         self.search_disable_check.setChecked(self.model.get("search_disable", True))
-        self.max_tokens_input.setValue(self.model.get("max_tokens", 4096))
+        self.enable_thinking_check.setChecked(self.model.get("enable_thinking", False))
+        # Max tokens - 如果值在预设中则选中，否则显示在编辑框
+        max_tokens = str(self.model.get("max_tokens", 32768))
+        self.max_tokens_input.setEditText(max_tokens)
+        # Temperature
         self.temperature_input.setValue(self.model.get("temperature", 0.7))
-
-    def _fetch_models(self) -> None:
-        """从API获取可用模型列表"""
-        # 获取API Key和Base URL
-        api_key = self.api_key_input.text().strip()
-        base_url = self.base_url_input.currentText().strip()
-
-        # 验证必填字段
-        if not api_key:
-            QMessageBox.warning(self, "提示", "请先输入API Key")
-            self.api_key_input.setFocus()
-            return
-        if not base_url:
-            QMessageBox.warning(self, "提示", "请先选择或输入Base URL")
-            self.base_url_input.setFocus()
-            return
-
-        # 打开模型选择对话框
-        dialog = QuickModelSelectDialog(api_key, base_url, self)
-        if dialog.exec_() == QDialog.Accepted:
-            model_id = dialog.get_selected_model_id()
-            if model_id:
-                self.model_id_input.setText(model_id)
-                # 如果模型名称为空，自动填充
-                if not self.name_input.text().strip():
-                    self.name_input.setText(model_id)
 
     def _save(self) -> None:
         """保存模型配置"""
@@ -168,7 +158,7 @@ class ModelEditDialog(QDialog):
         if not self.api_key_input.text().strip():
             QMessageBox.warning(self, "验证失败", "请输入API Key")
             return
-        if not self.model_id_input.text().strip():
+        if not self.model_id_input.currentText().strip():
             QMessageBox.warning(self, "验证失败", "请输入Model ID")
             return
 
@@ -176,10 +166,11 @@ class ModelEditDialog(QDialog):
             "name": self.name_input.text().strip(),
             "api_key": self.api_key_input.text().strip(),
             "base_url": self.base_url_input.currentText().strip(),
-            "model_id": self.model_id_input.text().strip(),
+            "model_id": self.model_id_input.currentText().strip(),
             "lora_id": self.lora_id_input.text().strip() or "0",
             "search_disable": self.search_disable_check.isChecked(),
-            "max_tokens": self.max_tokens_input.value(),
+            "enable_thinking": self.enable_thinking_check.isChecked(),
+            "max_tokens": int(self.max_tokens_input.currentText().strip() or "32768"),
             "temperature": self.temperature_input.value()
         }
 
