@@ -182,6 +182,24 @@ $env:ANTHROPIC_MODEL="你的模型ID"
 
 ---
 
+## 发布记录
+
+### 1.0.1 稳定性增强
+
+- 迁移用户配置到 `~/.claude/ifly_code_settings.json`，并在 GUI 中自动同步 Claude Code 设置，实现清晰的多模型管理。
+- 新增 GitHub Release 更新检查线程，主界面会在后台提示版本更新并跳出下载对话框。
+- 代理层改进：`_call_with_fallback` 复制请求数据后再降级，工具/enable_thinking/流式错误可自动降级重试；HTTP fallback 接受带 `charset` 的 `application/json`。
+- 流式与非流式响应都传递 `has_tool_calls` 给 `map_stop_reason`，工具调用的 stop_reason 始终是 `tool_use`。
+- 日志与托盘继续提供运行状态，配合更稳定的代理，提升 Claude Code 在 MaaS 上的使用体验。
+
+### 1.0.0 初始发布
+
+- 提供 Claude Code 与讯飞星辰 MaaS 之间的 Anthropic↔OpenAI 代理通道。
+- 包含 PySide6 GUI、系统托盘、实时日志、模型管理面板与自动同步配置的体验。
+- 支持直接运行（Python）与 exe 包，文档里有快速开始、配置说明与常见问题。
+
+---
+
 ## 项目结构
 
 ```

@@ -9,6 +9,7 @@
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
+import requests
 
 
 class ApiError(Exception):
@@ -75,6 +76,15 @@ class IflyMaaSClient:
             return models
 
         except Exception as e:
+            # MaaS 某些网关下 /models 可能返回 HTML 或非标准 JSON
+            fallback_models = IflyMaaSClient._try_models_http_fallback(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=timeout
+            )
+            if fallback_models is not None:
+                return fallback_models
+
             # 统一转换为ApiError抛出
             error_msg = str(e)
             if "401" in error_msg or "authentication" in error_msg.lower():
@@ -85,8 +95,48 @@ class IflyMaaSClient:
                 raise ApiError("请求超时，请检查网络连接")
             elif "connection" in error_msg.lower():
                 raise ApiError("网络连接失败，请检查Base URL是否正确")
+            elif "_set_private_attributes" in error_msg or "attributeerror" in error_msg.lower():
+                raise ApiError("模型列表接口返回格式异常（可能返回了非JSON页面），请手动填写 Model ID")
             else:
                 raise ApiError(f"获取模型列表失败: {error_msg}")
+
+    @staticmethod
+    def _try_models_http_fallback(api_key: str, base_url: str, timeout: int) -> Optional[List[Dict[str, Any]]]:
+        """在 SDK 解析失败时，用 requests 直接请求 /models"""
+        base_url = (base_url or "").rstrip("/")
+        if not base_url:
+            return None
+
+        url = f"{base_url}/models"
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+        except Exception:
+            return None
+
+        content_type = (resp.headers.get("content-type") or "").lower()
+        if "application/json" not in content_type:
+            return None
+
+        try:
+            data = resp.json()
+        except Exception:
+            return None
+
+        raw_models = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(raw_models, list):
+            return None
+
+        models = []
+        for model in raw_models:
+            if isinstance(model, dict) and model.get("id"):
+                models.append({
+                    "id": str(model.get("id")),
+                    "created": model.get("created", 0),
+                    "object": model.get("object", "model")
+                })
+        return models if models else None
 
     @staticmethod
     def validate_credentials(api_key: str, base_url: str) -> tuple[bool, str]:

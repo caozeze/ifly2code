@@ -162,6 +162,15 @@ class ModelEditDialog(QDialog):
             QMessageBox.warning(self, "验证失败", "请输入Model ID")
             return
 
+        max_tokens_text = self.max_tokens_input.currentText().strip() or "32768"
+        try:
+            max_tokens = int(max_tokens_text)
+            if max_tokens <= 0:
+                raise ValueError("max_tokens must be positive")
+        except ValueError:
+            QMessageBox.warning(self, "验证失败", "最大输出必须是大于0的整数")
+            return
+
         self.model_data = {
             "name": self.name_input.text().strip(),
             "api_key": self.api_key_input.text().strip(),
@@ -170,7 +179,7 @@ class ModelEditDialog(QDialog):
             "lora_id": self.lora_id_input.text().strip() or "0",
             "search_disable": self.search_disable_check.isChecked(),
             "enable_thinking": self.enable_thinking_check.isChecked(),
-            "max_tokens": int(self.max_tokens_input.currentText().strip() or "32768"),
+            "max_tokens": max_tokens,
             "temperature": self.temperature_input.value()
         }
 

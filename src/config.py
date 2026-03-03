@@ -8,7 +8,9 @@
 """
 
 import json
+import shutil
 import sys
+import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -108,13 +110,18 @@ class Config:
             config_path: 配置文件路径，默认为 exe 所在目录或项目目录下的 config.json
         """
         if config_path is None:
-            # 检测是否为 PyInstaller 打包环境
-            if getattr(sys, 'frozen', False):
-                # 打包后：使用 exe 所在目录
-                self.config_path = Path(sys.executable).parent / "config.json"
-            else:
-                # 开发环境：使用项目目录
-                self.config_path = Path(__file__).parent.parent / "config.json"
+            # 新路径：~/.claude/ifly_code_settings.json
+            self.config_path = Path.home() / '.claude' / 'ifly_code_settings.json'
+
+            # 兼容迁移：从旧路径复制到新路径
+            if not self.config_path.exists():
+                if getattr(sys, 'frozen', False):
+                    old_path = Path(sys.executable).parent / "config.json"
+                else:
+                    old_path = Path(__file__).parent.parent / "config.json"
+                if old_path.exists():
+                    self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(old_path, self.config_path)
         else:
             self.config_path = Path(config_path)
 
@@ -143,12 +150,12 @@ class Config:
                 self._config = self._deep_merge(self.DEFAULT_CONFIG, loaded)
             else:
                 # 使用默认配置
-                self._config = self.DEFAULT_CONFIG.copy()
+                self._config = copy.deepcopy(self.DEFAULT_CONFIG)
                 self.save()
             return True
         except (json.JSONDecodeError, IOError) as e:
             print(f"配置文件加载失败: {e}")
-            self._config = self.DEFAULT_CONFIG.copy()
+            self._config = copy.deepcopy(self.DEFAULT_CONFIG)
             return False
 
     def _migrate_old_config(self, old_config: Dict) -> Dict:
@@ -250,7 +257,7 @@ class Config:
         Returns:
             完整的配置字典
         """
-        return self._config.copy()
+        return copy.deepcopy(self._config)
 
     def _deep_merge(self, base: Dict, update: Dict) -> Dict:
         """深度合并两个字典
@@ -262,7 +269,7 @@ class Config:
         Returns:
             合并后的字典
         """
-        result = base.copy()
+        result = copy.deepcopy(base)
         for key, value in update.items():
             if key in result and isinstance(result[key], dict) and isinstance(value, dict):
                 result[key] = self._deep_merge(result[key], value)
@@ -278,7 +285,7 @@ class Config:
         Returns:
             模型列表
         """
-        return self._config.get("models", []).copy()
+        return copy.deepcopy(self._config.get("models", []))
 
     def get_model_names(self) -> List[str]:
         """获取所有模型名称列表
@@ -457,7 +464,6 @@ class Config:
         if not models:
             return False
 
-        import copy
         self._config["models"] = copy.deepcopy(models)
 
         # 确保 current_model 有效

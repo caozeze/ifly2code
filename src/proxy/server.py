@@ -15,6 +15,8 @@ from typing import Callable, Dict, Optional
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 from openai import OpenAI
+from werkzeug.exceptions import BadRequest
+from werkzeug.serving import make_server
 
 from .converter import APIConverter
 from ..logger import ProxyLogger
@@ -47,6 +49,7 @@ class ProxyServer:
         self.app = None
         self.client = None
         self.thread: Optional[threading.Thread] = None
+        self.http_server = None
         self.converter = APIConverter()
 
         # 请求计数统计（使用线程锁保护）
@@ -136,6 +139,12 @@ class ProxyServer:
 
         try:
             data = request.get_json()
+            if not isinstance(data, dict):
+                self.logger.warning(f"[{request_id}] 请求体不是JSON对象")
+                return jsonify({
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": "请求体必须是JSON对象"}
+                }), 400
             model = data.get('model', 'unknown')
 
             self.logger.info(f"[{request_id}] model={model}, stream={data.get('stream', False)}")
@@ -193,6 +202,18 @@ class ProxyServer:
                         self.logger.debug(f"Write 工具完整定义: {json.dumps(tool, ensure_ascii=False)[:500]}...")
                         break
 
+            # tool_choice 兼容转换（Anthropic -> MaaS）
+            anthropic_tool_choice = data.get('tool_choice')
+            openai_tool_choice = None
+            if anthropic_tool_choice is not None:
+                openai_tool_choice = self.converter.anthropic_to_openai_tool_choice(
+                    anthropic_tool_choice
+                )
+                if openai_tool_choice is None:
+                    self.logger.warning(f"无法识别 tool_choice，已忽略: {anthropic_tool_choice}")
+                else:
+                    self.logger.debug(f"tool_choice 映射: {anthropic_tool_choice} -> {openai_tool_choice}")
+
             stream = data.get('stream', False)
             _, _, max_tokens, temperature = self.converter.extract_stream_params(data)
 
@@ -230,6 +251,8 @@ class ProxyServer:
             # 如果有 tools，添加到调用
             if openai_tools:
                 call_kwargs["tools"] = openai_tools
+                if openai_tool_choice is not None:
+                    call_kwargs["tool_choice"] = openai_tool_choice
                 # 调试：打印 Bash 工具的完整定义
                 for tool in openai_tools:
                     if tool.get('function', {}).get('name') == 'Bash':
@@ -239,20 +262,91 @@ class ProxyServer:
             # 调试：打印请求参数摘要
             self.logger.debug(f"API 请求: model={model_id}, stream={stream}, has_tools={bool(openai_tools)}, messages={len(openai_messages)}条")
 
-            # 调用OpenAI API
-            response = self.client.chat.completions.create(**call_kwargs)
+            # 调用OpenAI API（支持自动降级重试）
+            response, used_stream = self._call_with_fallback(call_kwargs, stream)
 
-            if stream:
+            if used_stream:
                 return self._handle_stream_response(response)
             else:
                 return self._handle_normal_response(response, model_id)
 
+        except BadRequest:
+            self.logger.warning(f"[{request_id}] 无效的JSON请求体")
+            return jsonify({
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "请求体不是合法JSON"}
+            }), 400
         except Exception as e:
             self.logger.error(f"请求处理错误: {e}")
             return jsonify({
                 "type": "error",
                 "error": {"type": "api_error", "message": str(e)}
             }), 500
+
+    def _call_with_fallback(self, call_kwargs, stream):
+        """调用 API，失败时自动降级重试
+
+        降级策略：
+        - tools 相关错误 → 去掉 tools 重试
+        - enable_thinking 相关错误 → 去掉 enable_thinking 重试
+        - 流式错误（WebSocket/EOF）→ 非流式重试
+
+        Returns:
+            (response, used_stream)
+        """
+        call_kwargs = call_kwargs.copy()
+        try:
+            resp = self.client.chat.completions.create(**call_kwargs)
+            return resp, stream
+        except Exception as e:
+            err_msg = str(e).lower()
+
+            # tool_choice 不兼容 → 降级为 auto / 移除后重试
+            if "tool_choice" in err_msg and "tool_choice" in call_kwargs:
+                self.logger.warning("当前模型/网关不兼容 tool_choice，尝试降级重试")
+                original = call_kwargs.get("tool_choice")
+
+                retry_choices = []
+                if original != "auto":
+                    retry_choices.append("auto")
+                retry_choices.append(None)  # 表示移除 tool_choice
+
+                for fallback_choice in retry_choices:
+                    try:
+                        if fallback_choice is None:
+                            call_kwargs.pop("tool_choice", None)
+                        else:
+                            call_kwargs["tool_choice"] = fallback_choice
+                        resp = self.client.chat.completions.create(**call_kwargs)
+                        return resp, stream
+                    except Exception:
+                        continue
+                # 所有降级都失败，继续走后续兜底逻辑
+
+            # tools 不支持 → 去掉 tools 重试
+            if "tools" in err_msg and "tools" in call_kwargs:
+                self.logger.warning(f"模型不支持 tools，去掉 tools 重试")
+                call_kwargs.pop("tools", None)
+                call_kwargs.pop("tool_choice", None)
+                resp = self.client.chat.completions.create(**call_kwargs)
+                return resp, stream
+
+            # enable_thinking 不支持 → 去掉重试
+            if "thinking" in err_msg and call_kwargs.get("extra_body", {}).get("enable_thinking"):
+                self.logger.warning(f"模型不支持 enable_thinking，去掉重试")
+                call_kwargs["extra_body"].pop("enable_thinking", None)
+                resp = self.client.chat.completions.create(**call_kwargs)
+                return resp, stream
+
+            # 流式错误（WebSocket/EOF）→ 非流式重试
+            if stream and ("websocket" in err_msg or "eof" in err_msg or "1006" in err_msg):
+                self.logger.warning(f"流式传输失败，降级为非流式重试")
+                call_kwargs["stream"] = False
+                call_kwargs.pop("stream_options", None)
+                resp = self.client.chat.completions.create(**call_kwargs)
+                return resp, False
+
+            raise
 
     def _handle_stream_response(self, response) -> Response:
         """处理流式响应
@@ -273,123 +367,135 @@ class ProxyServer:
                 yield self.converter.create_stream_start_events(message_id, model_id)
                 self.logger.debug("Stream started, waiting for chunks...")
 
-                # 修复：使用字典追踪多个工具调用，按 index 索引
-                tool_calls_by_index = {}  # {index: {"id": ..., "name": ..., "args": ""}}
-                content_index = 0
-                text_started = False
+                # Anthropic content block 索引必须单调递增，且同一索引类型不能冲突
+                next_block_index = 0
+                text_block_index = None
+                text_block_open = False
+                tool_states = {}
+                # tool_states:
+                # {openai_index: {"anthropic_index": int, "id": str, "name": str, "started": bool, "args": str}}
+
                 has_tool_calls = False
+                final_finish_reason = None
+                output_tokens = 0
                 chunk_count = 0
 
                 for chunk in response:
                     chunk_count += 1
-                    if chunk_count <= 5:  # 只记录前5个chunk
-                        self.logger.debug(f"chunk #{chunk_count}: choices={bool(chunk.choices)}, delta has content={bool(chunk.choices[0].delta.content if chunk.choices else False)}")
+                    choices = getattr(chunk, 'choices', None) or []
 
-                    if not chunk.choices:
+                    # include_usage=True 时，usage 可能出现在无 choices 的 chunk 中
+                    usage = getattr(chunk, 'usage', None)
+                    if usage and hasattr(usage, 'completion_tokens'):
+                        output_tokens = usage.completion_tokens or output_tokens
+
+                    if chunk_count <= 5:
+                        has_content = False
+                        if choices and hasattr(choices[0], 'delta'):
+                            has_content = bool(getattr(choices[0].delta, 'content', None))
+                        self.logger.debug(
+                            f"chunk #{chunk_count}: choices={bool(choices)}, delta has content={has_content}"
+                        )
+
+                    if not choices:
                         continue
 
-                    delta = chunk.choices[0].delta
+                    choice = choices[0]
+                    delta = choice.delta
+                    if getattr(choice, 'finish_reason', None) is not None:
+                        final_finish_reason = choice.finish_reason
 
                     # 处理文本内容
                     if delta.content:
                         # 如果还没有开始文本内容块，先开始
-                        if not text_started:
+                        if not text_block_open:
+                            text_block_index = next_block_index
+                            next_block_index += 1
                             yield self.converter.create_sse_event(
                                 self.converter.EVENT_CONTENT_BLOCK_START,
-                                {"type": "content_block_start", "index": content_index,
+                                {"type": "content_block_start", "index": text_block_index,
                                  "content_block": {"type": "text", "text": ""}}
                             )
-                            text_started = True
+                            text_block_open = True
 
                         content = delta.content
-                        yield self.converter.create_content_delta_event(content, content_index)
+                        yield self.converter.create_content_delta_event(content, text_block_index)
 
-                    # 处理 tool_calls - 改为独立的 if，与 content 互不干扰
+                    # 处理 tool_calls
                     if hasattr(delta, 'tool_calls') and delta.tool_calls:
                         has_tool_calls = True
 
                         # 如果之前有文本内容，先结束它
-                        if text_started:
-                            yield self.converter.create_content_block_stop_event(content_index)
-                            text_started = False
+                        if text_block_open and text_block_index is not None:
+                            yield self.converter.create_content_block_stop_event(text_block_index)
+                            text_block_open = False
 
-                        # 修复：正确处理多个工具调用，按线性顺序
                         for tool_call in delta.tool_calls:
-                            # OpenAI 使用 index 来区分不同的工具调用
-                            tc_index = tool_call.index
-                            call_id = tool_call.id or f"call_{tc_index}"
+                            tc_index = tool_call.index if tool_call.index is not None else len(tool_states)
+                            function = getattr(tool_call, 'function', None)
+                            call_id = getattr(tool_call, 'id', None)
+                            func_name = getattr(function, 'name', None) if function else None
+                            args_delta = getattr(function, 'arguments', None) if function else None
 
-                            if tc_index not in tool_calls_by_index:
-                                # 新工具调用开始：先结束所有之前的工具（保持线性顺序）
-                                for idx in list(tool_calls_by_index.keys()):
-                                    if idx < tc_index:
-                                        yield self.converter.create_content_block_stop_event(idx)
-                                        del tool_calls_by_index[idx]
-
-                                # 开始新工具
-                                function = tool_call.function
-                                func_name = function.name if hasattr(function, 'name') else ''
-
-                                # 调试：检查 function 对象的所有属性
-                                func_attrs = {k: getattr(function, k, None) for k in ['name', 'arguments']}
-                                self.logger.debug(f"新工具调用: index={tc_index}, id={call_id}, function_attrs={func_attrs}")
-
-                                yield self.converter.create_tool_use_start_event(
-                                    tc_index, call_id, func_name
-                                )
-                                tool_calls_by_index[tc_index] = {
-                                    "id": call_id,
-                                    "name": func_name,
+                            state = tool_states.get(tc_index)
+                            if state is None:
+                                state = {
+                                    "anthropic_index": next_block_index,
+                                    "id": call_id or f"call_{tc_index}",
+                                    "name": func_name or f"tool_{tc_index}",
+                                    "started": False,
                                     "args": ""
                                 }
+                                tool_states[tc_index] = state
+                                next_block_index += 1
+                            else:
+                                if call_id:
+                                    state["id"] = call_id
+                                if func_name:
+                                    state["name"] = func_name
 
-                            # 处理参数增量（累加是正确的，符合 Anthropic 协议）
-                            if hasattr(tool_call.function, 'arguments') and tool_call.function.arguments:
-                                args_delta = tool_call.function.arguments
-                                tool_calls_by_index[tc_index]["args"] += args_delta
-                                self.logger.debug(f"参数增量: index={tc_index}, delta_length={len(args_delta)}, total={len(tool_calls_by_index[tc_index]['args'])}")
+                            if not state["started"]:
+                                yield self.converter.create_tool_use_start_event(
+                                    state["anthropic_index"],
+                                    state["id"],
+                                    state["name"]
+                                )
+                                state["started"] = True
+                                self.logger.debug(
+                                    f"新工具调用: openai_index={tc_index}, anthropic_index={state['anthropic_index']}, id={state['id']}, name={state['name']}"
+                                )
+
+                            # 按协议发送“增量片段”，而不是累计字符串
+                            if args_delta:
+                                state["args"] += args_delta
                                 yield self.converter.create_tool_use_delta_event(
-                                    tc_index, tool_calls_by_index[tc_index]["args"]
+                                    state["anthropic_index"],
+                                    args_delta
                                 )
 
                 # 结束所有未结束的内容块
-                # 关键修复：在发送 stop 事件之前，发送完整的 tool_use input
-                for idx in tool_calls_by_index:
-                    tc = tool_calls_by_index[idx]
-                    # 发送完整的 input（确保参数被正确传递）
-                    import json
-                    try:
-                        # 解析累积的 JSON 参数
-                        if tc["args"]:
-                            full_input = json.loads(tc["args"])
-                        else:
-                            full_input = {}
-                    except json.JSONDecodeError as e:
-                        self.logger.warning(f"JSON 解析失败: args='{tc.get('args', '')}', error={e}")
-                        full_input = {}
+                if text_block_open and text_block_index is not None:
+                    yield self.converter.create_content_block_stop_event(text_block_index)
 
-                    # 发送最终确认事件，包含完整的 input
-                    self.logger.debug(f"发送最终 input: index={idx}, input_keys={list(full_input.keys())}, input={full_input}")
-                    yield self.converter.create_final_tool_use_input_event(idx, full_input)
-                    # 然后发送停止事件
-                    yield self.converter.create_content_block_stop_event(idx)
-                if text_started:
-                    yield self.converter.create_content_block_stop_event(content_index)
+                for tc_index in sorted(tool_states.keys()):
+                    state = tool_states[tc_index]
+                    if state.get("started"):
+                        yield self.converter.create_content_block_stop_event(
+                            state["anthropic_index"]
+                        )
 
-                self.logger.debug(f"Stream ending: text_started={text_started}, has_tool_calls={has_tool_calls}, chunks={chunk_count}")
-                self.logger.debug(f"tool_calls_by_index 状态: {list(tool_calls_by_index.keys())}")
-
-                # 调试：打印最终的工具调用参数
-                if tool_calls_by_index:
-                    for idx, tc in tool_calls_by_index.items():
-                        self.logger.debug(f"工具调用最终: index={idx}, id={tc['id']}, name={tc['name']}, args长度={len(tc['args'])}, args={tc['args'][:200]}...")
-                else:
-                    self.logger.debug("tool_calls_by_index 为空！")
+                self.logger.debug(
+                    f"Stream ending: has_tool_calls={has_tool_calls}, chunks={chunk_count}, finish_reason={final_finish_reason}"
+                )
 
                 # 发送结束事件
-                # 修复：根据是否有工具调用设置正确的 stop_reason
-                stop_reason = "tool_use" if has_tool_calls else "end_turn"
-                yield self.converter.create_stream_end_events(stop_reason=stop_reason)
+                stop_reason = self.converter.map_stop_reason(
+                    final_finish_reason, has_tool_calls=has_tool_calls
+                )
+                yield self.converter.create_stream_end_events(
+                    output_tokens=output_tokens,
+                    stop_reason=stop_reason
+                )
 
                 self.logger.debug("Stream completed successfully")
 
@@ -425,6 +531,15 @@ class ProxyServer:
             if hasattr(message, 'tool_calls') and message.tool_calls:
                 # 转换 tool_calls 到 Anthropic 格式
                 content_blocks = []
+
+                # 兼容“文本 + 工具调用”同回合输出
+                text_content = getattr(message, 'content', None)
+                if text_content and str(text_content).strip():
+                    content_blocks.append({
+                        "type": "text",
+                        "text": str(text_content)
+                    })
+
                 for tc in message.tool_calls:
                     try:
                         # 解析 arguments
@@ -465,7 +580,9 @@ class ProxyServer:
                     "role": "assistant",
                     "content": content_blocks,
                     "model": model_id,
-                    "stop_reason": "tool_use",
+                    "stop_reason": self.converter.map_stop_reason(
+                        response.choices[0].finish_reason, has_tool_calls=True
+                    ),
                     "stop_sequence": None,
                     "usage": {
                         "input_tokens": input_tokens,
@@ -564,23 +681,29 @@ class ProxyServer:
             self.logger.error("OpenAI客户端未初始化，无法启动代理")
             return False
 
+        try:
+            # 使用可关闭的WSGI Server，确保 stop() 能真正停止监听
+            self.http_server = make_server(host, port, self.app, threaded=True)
+        except OSError as e:
+            self.logger.error(f"创建HTTP服务器失败: {e}")
+            self.http_server = None
+            return False
+
         def run_flask():
             """在单独线程中运行Flask"""
-            self.app.run(
-                host=host,
-                port=port,
-                debug=False,
-                use_reloader=False,
-                threaded=True
-            )
+            try:
+                if self.http_server:
+                    self.http_server.serve_forever()
+            except Exception as e:
+                if self.running:
+                    self.logger.error(f"HTTP服务器运行异常: {e}")
 
         self.thread = threading.Thread(target=run_flask, daemon=True)
-        self.thread.start()
-
         self.running = True
         self.actual_port = port  # 保存实际使用的端口
         self.start_time = time.time()
         self.request_count = 0
+        self.thread.start()
 
         self.logger.info("=" * 60)
         self.logger.info("Anthropic API 代理服务器启动")
@@ -603,6 +726,20 @@ class ProxyServer:
 
         self.running = False
         self.start_time = None
+
+        if self.http_server:
+            try:
+                self.http_server.shutdown()
+                self.http_server.server_close()
+            except Exception as e:
+                self.logger.warning(f"关闭HTTP服务器失败: {e}")
+            finally:
+                self.http_server = None
+
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=3)
+        self.thread = None
+        self.actual_port = None
 
         self.logger.info("代理服务器已停止")
 

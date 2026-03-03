@@ -181,6 +181,40 @@ class APIConverter:
         return openai_tools
 
     @staticmethod
+    def anthropic_to_openai_tool_choice(tool_choice: Any) -> Optional[str]:
+        """将 Anthropic tool_choice 转换为 MaaS 兼容格式
+
+        MaaS 当前兼容层要求 tool_choice 为字符串：
+        - "auto"
+        - "none"
+        - "required"
+
+        对于 Anthropic 的特定工具选择（type=tool, name=xxx），
+        降级为 "required" 以保证至少触发工具调用。
+        """
+        if tool_choice is None:
+            return None
+
+        if isinstance(tool_choice, str):
+            normalized = tool_choice.strip().lower()
+            if normalized in {"auto", "none", "required"}:
+                return normalized
+            # 不支持的字符串值默认降级为 auto
+            return "auto"
+
+        if isinstance(tool_choice, dict):
+            tc_type = str(tool_choice.get("type", "")).strip().lower()
+            if tc_type in {"auto", "none", "required"}:
+                return tc_type
+            if tc_type == "any":
+                return "required"
+            if tc_type == "tool":
+                # MaaS 不支持对象格式的指定工具，降级为 required
+                return "required"
+
+        return None
+
+    @staticmethod
     def openai_to_anthropic_response(
         openai_response: Any,
         model_id: str,
@@ -214,10 +248,14 @@ class APIConverter:
 
         # 提取内容
         content = ""
+        has_tool_calls = False
         if hasattr(openai_response, 'choices') and openai_response.choices:
             message = openai_response.choices[0].message
             if hasattr(message, 'content'):
                 content = message.content or ""
+
+            if hasattr(message, 'tool_calls') and message.tool_calls:
+                has_tool_calls = True
 
         # 提取使用量信息
         input_tokens = 0
@@ -242,13 +280,30 @@ class APIConverter:
             "role": "assistant",
             "content": [{"type": "text", "text": content}],
             "model": model_id,
-            "stop_reason": stop_reason,
+            "stop_reason": APIConverter.map_stop_reason(stop_reason),
             "stop_sequence": None,
             "usage": {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens
             }
         }
+
+    @staticmethod
+    def map_stop_reason(
+        finish_reason: Optional[str],
+        has_tool_calls: bool = False
+    ) -> str:
+        """将 OpenAI finish_reason 映射为 Anthropic stop_reason"""
+        if finish_reason:
+            fr = str(finish_reason).strip().lower()
+            if fr in {"tool_calls", "function_call"}:
+                return "tool_use"
+            if fr == "length":
+                return "max_tokens"
+            if fr in {"stop", "content_filter"}:
+                return "end_turn"
+
+        return "tool_use" if has_tool_calls else "end_turn"
 
     @staticmethod
     def create_sse_event(event_type: str, data: Dict) -> str:
@@ -383,12 +438,12 @@ class APIConverter:
         return APIConverter.create_sse_event(APIConverter.EVENT_CONTENT_BLOCK_START, data)
 
     @staticmethod
-    def create_tool_use_delta_event(index: int, partial_json: str) -> str:
+    def create_tool_use_delta_event(index: int, json_fragment: str) -> str:
         """创建 tool_use 参数增量事件
 
         Args:
             index: 内容块索引
-            partial_json: 累积的JSON参数字符串
+            json_fragment: 本次新增的JSON片段（增量）
 
         Returns:
             SSE格式的事件字符串
@@ -396,7 +451,7 @@ class APIConverter:
         data = {
             "type": "content_block_delta",
             "index": index,
-            "delta": {"type": "input_json_delta", "partial_json": partial_json}
+            "delta": {"type": "input_json_delta", "partial_json": json_fragment}
         }
         return APIConverter.create_sse_event(APIConverter.EVENT_CONTENT_BLOCK_DELTA, data)
 

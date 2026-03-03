@@ -9,6 +9,7 @@ GUI主窗口模块
 
 import json
 import sys
+import threading
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -92,6 +93,8 @@ class MainWindow(QMainWindow):
 
     # 定义日志信号
     log_signal = Signal(str, str)
+    # 更新检查信号 (version, url)
+    update_signal = Signal(str, str)
 
     def __init__(self):
         """初始化主窗口"""
@@ -129,6 +132,10 @@ class MainWindow(QMainWindow):
         # 连接日志信号
         self.log_signal.connect(self._on_log_message)
         self.logger.set_gui_callback(self._log_callback)
+
+        # 启动时后台检查更新
+        self.update_signal.connect(self._on_update_available)
+        threading.Thread(target=self._check_update, daemon=True).start()
 
     def _init_ui(self) -> None:
         """初始化用户界面"""
@@ -396,6 +403,10 @@ Model ID: {model.get('model_id', 'N/A')}
 
     def _start_proxy(self) -> None:
         """启动代理服务器"""
+        # 先保存端口配置，避免异常退出时端口变更丢失
+        self.config.set('proxy.port', self.port_input.value())
+        self.config.save()
+
         if not self.proxy_server:
             self._init_proxy_server()
 
@@ -545,6 +556,21 @@ $env:ANTHROPIC_MODEL="{model_id}"
         """清空日志"""
         self.log_text.clear()
 
+    def _check_update(self) -> None:
+        """后台线程：检查 GitHub Release 新版本"""
+        from ..updater import check_update
+        has_update, version, url = check_update()
+        if has_update and version and url:
+            self.update_signal.emit(version, url)
+
+    def _on_update_available(self, version: str, url: str) -> None:
+        """收到新版本信号时弹窗提醒"""
+        QMessageBox.information(
+            self,
+            "发现新版本",
+            f"新版本 v{version} 已发布！\n\n下载地址：\n{url}",
+        )
+
     def _update_claude_settings_with_port(self, port: int) -> None:
         """使用指定端口更新 Claude Code 的 settings.json
 
@@ -609,6 +635,9 @@ $env:ANTHROPIC_MODEL="{model_id}"
         # 停止代理
         if self.proxy_running:
             self._stop_proxy()
+
+        # 保存端口配置
+        self.config.set('proxy.port', self.port_input.value())
 
         # 保存窗口大小
         self.config.set('app.window_width', self.width())

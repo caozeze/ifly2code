@@ -180,6 +180,8 @@ class TrayIcon:
         # 更新提示
         if running:
             port = self.window.config.get('proxy.port', 8080)
+            if hasattr(self.window, 'proxy_server') and self.window.proxy_server:
+                port = self.window.proxy_server.actual_port or port
             self.tray.setToolTip(
                 f"讯飞星辰代理服务 - 运行中\n"
                 f"http://127.0.0.1:{port}"
