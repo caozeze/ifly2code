@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from ..config import Config, get_config
 from ..logger import ProxyLogger, get_logger
 from ..proxy.server import ProxyServer
+from ..version import __version__
 from .model_dialog import ModelManageDialog
 from .tray_icon import TrayIcon
 
@@ -162,11 +163,19 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self._create_control_panel())
         main_layout.addWidget(self._create_log_panel(), stretch=1)
 
-        # 添加署名标签
+        # 底部状态行：版本号 + 对齐
+        bottom_layout = QHBoxLayout()
+        self.version_label = QLabel(f"Version {__version__}")
+        self.version_label.setStyleSheet("color: #888; font-size: 11px;")
+        bottom_layout.addWidget(self.version_label)
+        bottom_layout.addStretch()
+
         credit_label = QLabel("Powered by zecao")
         credit_label.setAlignment(Qt.AlignRight)
         credit_label.setStyleSheet("color: #888; font-size: 11px; padding: 5px;")
-        main_layout.addWidget(credit_label)
+        bottom_layout.addWidget(credit_label)
+
+        main_layout.addLayout(bottom_layout)
 
     def _create_config_panel(self) -> QGroupBox:
         """创建配置面板
