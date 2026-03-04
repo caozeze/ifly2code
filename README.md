@@ -8,7 +8,7 @@
 
 讯飞星辰 MaaS 代理服务 - 让 Claude Code 支持讯飞星辰大模型
 
-[功能特性](#功能特性) • [快速开始](#快速开始) • [配置说明](#配置说明) • [常见问题](#常见问题)
+[功能特性](#功能特性) • [快速开始](#快速开始) • [使用流程](#使用流程) • [配置说明](#配置说明) • [常见问题](#常见问题)
 
 [English](README_en.md)
 
@@ -63,7 +63,18 @@ python main.py
 
 ---
 
-## 配置说明
+## 使用流程
+
+以下步骤展示了使用 GUI 代理的标准流程，同时说明了每一步背后会进行的配置更新，帮助你理解为什么需要重启 Claude Code 以及何时需要手动干预。
+
+1. **启动应用并加载现有配置** – 运行 `python main.py`（或双击 `ifly2code-gui.exe`）。应用会读取或创建 `config.json`，并把之前保存的 API Key、Base URL 与模型预填入对应输入框，方便直接复用。
+2. **选择模型与填写 API Key / Base URL** – 在模型下拉菜单中选中想用的 MaaS 模型，粘贴 API Key，只有在指定地区或自定义域名时才需要调整 Base URL（例如 `https://maas-api.cn-huabei-1.xf-yun.com/v2`）。高级设置（如 `lora_id`、`search_disable`）默认保持不动即可，只有特殊需求才要改。点击「保存」后，GUI 会把这些信息写回 `config.json`，并刷新内部模型列表供 Claude 使用。
+3. **启动代理并同步 Claude 配置** – 点击「启动代理」会启动本地服务，并同步 Claude Code 的 `settings.json`（通常位于 `~/.claude/claude_code_settings.json`），写入 `ANTHROPIC_BASE_URL=http://127.0.0.1:<端口>`、`ANTHROPIC_AUTH_TOKEN=sk-proxy-key`、`ANTHROPIC_MODEL=<所选模型>` 以及所配置的 MaaS `base_url`，保证 Claude 通过本地代理请求讯飞星辰服务。
+4. **重启 Claude Code** – Claude 会缓存旧的配置，必须重新打开才能加载被代理覆盖后的 `settings.json`，否则仍会请求旧的地址或模型。
+5. **运行 `/model` 验证当前模型** – 在 Claude Chat 界面输入 `/model`，收到的回应会显示当前 `settings.json` 中的模型 ID，确认代理与模型都已经生效。
+
+在上述流程中，点击「保存」会持续更新 `config.json`，启动代理会覆盖 Claude 的 `settings.json`，而高级设置则会默认保持当前值，除非你手动修改。每次重新启动 Claude 并运行 `/model`，都是确认代理配置被正确刷新的好方法。
+
 
 ### 应用配置
 

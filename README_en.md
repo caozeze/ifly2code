@@ -8,7 +8,7 @@
 
 **iFlytek MaaS Proxy Service - Enable Claude Code with iFlytek Models**
 
-[Features](#features) • [Quick Start](#quick-start) • [Configuration](#configuration) • [FAQ](#faq)
+[Features](#features) • [Quick Start](#quick-start) • [Usage Flow](#usage-flow) • [Configuration](#configuration) • [FAQ](#faq)
 
 [简体中文](README.md)
 
@@ -57,11 +57,17 @@ python main.py
 1. Download `ifly2code-gui.exe`
 2. Double-click to run
 
-### Method 3: Build Your Own
+## Usage Flow
 
-See [BUILD Guide (BUILD.md)](BUILD.md) for instructions on compiling and packaging.
+These steps describe the normal workflow for using the GUI proxy and explain what configuration changes happen at each stage so you know when to restart Claude Code and when manual intervention is required.
 
----
+1. **Start the app and load saved settings** — Run `python main.py` (or double-click `ifly2code-gui.exe`). The window reads or creates `config.json`, pre-fills the API key, Base URL, and model fields with the last saved values, and prepares the UI for a quick restart.
+2. **Choose a model and enter API Key/Base URL** — Pick the MaaS model you want from the dropdown, paste the API key, and only edit the Base URL if you operate in a different region (e.g., `https://maas-api.cn-huabei-1.xf-yun.com/v2`). Advanced settings such as `lora_id` and `search_disable` should generally stay at their defaults unless you have a specific need. Click “Save” and the app writes these values back to `config.json`, refreshing the internal model list so Claude Code sees the latest selection.
+3. **Start the proxy and sync Claude’s settings** — Clicking “Start Proxy” launches the local server and rewrites Claude Code’s `settings.json` (usually located at `~/.claude/claude_code_settings.json`) with `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`, `ANTHROPIC_AUTH_TOKEN=sk-proxy-key`, the selected model, and the configured MaaS base URL so Claude sends traffic through the proxy.
+4. **Restart Claude Code** — Claude caches the previous configuration, so restarting the client forces it to reload the rewritten settings and stop sending requests to the old host.
+5. **Run `/model` to verify the current model** — Type `/model` inside Claude Code; the response echoes the model from the active settings file, confirming the proxy setup worked.
+
+Saving always rewrites `config.json`, starting the proxy updates Claude’s `settings.json`, and advanced settings stay untouched unless you edit them manually. Restarting Claude and using `/model` are the safest ways to confirm everything has been refreshed.
 
 ## Configuration
 

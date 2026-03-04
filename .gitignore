@@ -1,4 +1,4 @@
-# 用户配置（包含 API 密钥，绝不能上传！）
+# 用户配置（包含 API 密钥，绝不能上传！)
 config.json
 
 # Python
@@ -49,3 +49,6 @@ logs/
 
 # 测试文件（调试用，不上传）
 test_*.py
+
+# Notes
+future_updates.md
