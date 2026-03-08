@@ -82,8 +82,18 @@ class ProxyServer:
         if not api_key or not base_url:
             self.logger.warning("API Key或Base URL未配置，代理功能可能无法正常工作")
         else:
-            self.client = OpenAI(api_key=api_key, base_url=base_url)
-            self.logger.info(f"OpenAI客户端已初始化: {base_url}")
+            # 从base_url提取host头部，用于HMAC签名验证
+            import urllib.parse
+            parsed_url = urllib.parse.urlparse(base_url)
+            host_header = parsed_url.netloc
+            
+            # 创建OpenAI客户端，添加host头部
+            self.client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                default_headers={"host": host_header} if host_header else None
+            )
+            self.logger.info(f"OpenAI客户端已初始化: {base_url}, host: {host_header}")
 
     def _register_routes(self) -> None:
         """注册Flask路由"""
