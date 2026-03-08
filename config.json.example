@@ -11,8 +11,11 @@
   "advanced": {
     "lora_id": "0",
     "search_disable": true,
+    "disable_tools": false,
+    "enable_thinking": false,
     "max_tokens": 4096,
-    "temperature": 0.7
+    "temperature": 0.7,
+    "fix_host_header": false
   },
   "app": {
     "autostart": false,

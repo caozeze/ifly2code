@@ -140,7 +140,7 @@ class MainWindow(QMainWindow):
 
     def _init_ui(self) -> None:
         """初始化用户界面"""
-        self.setWindowTitle("讯飞星辰 MaaS 代理服务")
+        self.setWindowTitle(f"讯飞星辰 MaaS 代理服务 v{__version__}")
         self.setMinimumSize(420, 560)
 
         # 从配置恢复窗口大小
@@ -223,6 +223,9 @@ class MainWindow(QMainWindow):
 
     def _load_model_list(self) -> None:
         """加载模型列表到下拉框"""
+        # 阻塞信号，避免在重新加载时触发多次 _on_model_changed
+        self.model_combo.blockSignals(True)
+
         self.model_combo.clear()
         model_names = self.config.get_model_names()
         self.model_combo.addItems(model_names)
@@ -232,6 +235,9 @@ class MainWindow(QMainWindow):
         index = self.model_combo.findText(current)
         if index >= 0:
             self.model_combo.setCurrentIndex(index)
+
+        # 恢复信号
+        self.model_combo.blockSignals(False)
 
         self._update_model_detail()
 
@@ -247,19 +253,18 @@ class MainWindow(QMainWindow):
             self._update_model_detail()
             # 自动更新 Claude Code 配置
             self._update_claude_settings()
+            self.logger.warning("⚠️ 模型已切换，建议重启 Claude Code 以加载新配置，确保LOG匹配新模型")
 
-            # 如果代理正在运行，提示用户重启
-            if self.proxy_running:
-                reply = QMessageBox.question(
-                    self,
-                    "模型已切换",
-                    "模型已切换，需要重启代理才能生效。\n是否立即重启代理？",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
-                )
-                if reply == QMessageBox.Yes:
-                    self._stop_proxy()
-                    self._start_proxy()
+            # 如果代理正在运行，重新初始化客户端（无需重启代理）
+            if self.proxy_running and self.proxy_server:
+                self.logger.info("模型已切换，正在重新初始化客户端...")
+                # 更新代理服务器的配置
+                self.proxy_server.config = self.config.get_current_model_config()
+                self.proxy_server.config['proxy']['port'] = self.port_input.value()
+                if self.proxy_server.reinit_client():
+                    self.logger.info("客户端重新初始化成功，新配置已生效")
+                else:
+                    self.logger.warning("客户端重新初始化失败，请检查配置")
 
     def _update_model_detail(self) -> None:
         """更新模型详情显示"""
@@ -284,12 +289,14 @@ Model ID: {model.get('model_id', 'N/A')}
             updated_models = dialog.get_models()
             selected_name = dialog.get_selected_model_name()
 
-            # 更新配置
+            # 先更新模型列表，再更新当前选中项
             self.config.set_models(updated_models)
             if selected_name:
                 self.config.set_current_model(selected_name)
-                self._load_model_list()
-                self.logger.info("模型列表已更新")
+                self.current_model_name = selected_name
+
+            self._load_model_list()
+            self.logger.info("模型列表已更新")
 
     def _create_control_panel(self) -> QGroupBox:
         """创建控制面板
@@ -416,8 +423,8 @@ Model ID: {model.get('model_id', 'N/A')}
         self.config.set('proxy.port', self.port_input.value())
         self.config.save()
 
-        if not self.proxy_server:
-            self._init_proxy_server()
+        # 总是重新创建 proxy_server 以确保使用最新配置
+        self._init_proxy_server()
 
         if self.proxy_server and self.proxy_server.start():
             self.proxy_running = True
@@ -566,9 +573,9 @@ $env:ANTHROPIC_MODEL="{model_id}"
         self.log_text.clear()
 
     def _check_update(self) -> None:
-        """后台线程：检查 GitHub Release 新版本"""
-        from ..updater import check_update
-        has_update, version, url = check_update()
+        """后台线程：检查 GitHub Release 新版本（带缓存）"""
+        from ..updater import check_update_with_cache
+        has_update, version, url = check_update_with_cache()
         if has_update and version and url:
             self.update_signal.emit(version, url)
 

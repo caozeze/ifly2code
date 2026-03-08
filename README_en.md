@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.2-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-green)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 
@@ -73,22 +73,34 @@ Saving always rewrites `config.json`, starting the proxy updates Claude’s `set
 
 ### Application Configuration
 
-On first run, a `config.json` configuration file will be automatically generated:
+On first run, a configuration file will be automatically generated (located at `~/.claude/ifly_code_settings.json`):
 
 ```json
 {
-  "api": {
-    "api_key": "your-api-key",
-    "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
-    "model_id": "your-model-id"
-  },
+  "models": [
+    {
+      "name": "Kimi K2.5",
+      "api_key": "your-api-key",
+      "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+      "model_id": "xopkimik25",
+      "max_tokens": 32768,
+      "temperature": 0.7,
+      "lora_id": "0",
+      "search_disable": true,
+      "enable_thinking": false,
+      "disable_tools": false,
+      "fix_host_header": false
+    }
+  ],
+  "current_model": "Kimi K2.5",
   "proxy": {
     "host": "127.0.0.1",
     "port": 8080
   },
-  "advanced": {
-    "lora_id": "0",
-    "search_disable": true
+  "app": {
+    "autostart": false,
+    "minimize_to_tray": true,
+    "log_level": "INFO"
   }
 }
 ```
@@ -97,9 +109,14 @@ On first run, a `config.json` configuration file will be automatically generated
 
 | Parameter | Description |
 |-----------|-------------|
+| `name` | Model display name |
 | `api_key` | iFlytek MaaS Platform API Key |
 | `base_url` | API request endpoint (supports v1/v2) |
 | `model_id` | Model ID |
+| `max_tokens` | Maximum output tokens |
+| `temperature` | Temperature parameter (0-1) |
+| `disable_tools` | Disable tool calls (for old model compatibility) |
+| `enable_thinking` | Enable thinking mode |
 | `port` | Local proxy listening port |
 
 ### Claude Code Configuration
@@ -185,6 +202,32 @@ $env:ANTHROPIC_MODEL="your-model-id"
 | Minimax M2.5 | `xminimaxm25` | MiniMax |
 
 You can also add other custom models in Model Management.
+
+---
+
+## Release Notes
+
+### 1.0.2 Experience Optimization
+
+- Added update check caching mechanism to avoid frequent network requests (24-hour cache)
+- Auto-select model after editing for smoother operation
+- Support configuration hot reload without restarting the application
+- Enhanced tool call compatibility with automatic handling of unsupported parameters for older models
+- Fixed Host header signature issue (optional configuration)
+
+### 1.0.1 Stability Enhancement
+
+- Migrated user configuration to `~/.claude/ifly_code_settings.json` with automatic Claude Code settings sync for clear multi-model management
+- Added GitHub Release update checker with background notifications and download dialog
+- Proxy layer improvements: `_call_with_fallback` copies request data before degradation; tools/enable_thinking/streaming errors auto-retry with fallback; HTTP fallback accepts `application/json` with `charset`
+- Both streaming and non-streaming responses pass `has_tool_calls` to `map_stop_reason`; tool call stop_reason is always `tool_use`
+- Logs and tray continue to provide runtime status with more stable proxy for better Claude Code experience on MaaS
+
+### 1.0.0 Initial Release
+
+- Provides Anthropic↔OpenAI proxy channel between Claude Code and iFlytek MaaS
+- Includes PySide6 GUI, system tray, real-time logs, model management panel, and auto-sync configuration
+- Supports direct Python execution and exe package with quick start guide, configuration docs, and FAQ
 
 ---
 

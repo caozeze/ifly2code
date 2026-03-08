@@ -81,9 +81,39 @@ class ProxyServer:
 
         if not api_key or not base_url:
             self.logger.warning("API Key或Base URL未配置，代理功能可能无法正常工作")
+            self.client = None
         else:
-            self.client = OpenAI(api_key=api_key, base_url=base_url)
-            self.logger.info(f"OpenAI客户端已初始化: {base_url}")
+            # 检查是否需要显式设置 host 头（用于解决某些网关的 HMAC 签名验证问题）
+            fix_host_header = self.config.get('advanced', {}).get('fix_host_header', False)
+
+            if fix_host_header:
+                from urllib.parse import urlparse
+                parsed = urlparse(base_url)
+                host_value = parsed.netloc
+                self.client = OpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    default_headers={"Host": host_value}
+                )
+                self.logger.info(f"OpenAI客户端已初始化: {base_url} (显式 Host: {host_value})")
+            else:
+                self.client = OpenAI(api_key=api_key, base_url=base_url)
+                self.logger.info(f"OpenAI客户端已初始化: {base_url}")
+
+    def reinit_client(self) -> bool:
+        """重新初始化OpenAI客户端（配置更新后调用）
+
+        Returns:
+            初始化成功返回True
+        """
+        with self._request_lock:
+            self._init_openai_client()
+            if self.client:
+                self.logger.info("OpenAI客户端已重新初始化")
+                return True
+            else:
+                self.logger.warning("OpenAI客户端重新初始化失败，配置可能不完整")
+                return False
 
     def _register_routes(self) -> None:
         """注册Flask路由"""
@@ -131,6 +161,19 @@ class ProxyServer:
         Returns:
             Flask响应对象
         """
+        # 运行时检查客户端是否初始化
+        if not self.client:
+            self.logger.warning("客户端未初始化，尝试重新初始化...")
+            self._init_openai_client()
+            if not self.client:
+                return jsonify({
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "API未配置，请在模型管理中设置API Key和Base URL"
+                    }
+                }), 400
+
         with self._request_lock:
             self.request_count += 1
             current_count = self.request_count
@@ -230,6 +273,7 @@ class ProxyServer:
             lora_id = advanced.get('lora_id', '0')
             search_disable = advanced.get('search_disable', True)
             enable_thinking = advanced.get('enable_thinking', False)
+            disable_tools = advanced.get('disable_tools', False)
 
             # 构建 extra_body
             extra_body = {"search_disable": search_disable}
@@ -250,14 +294,17 @@ class ProxyServer:
 
             # 如果有 tools，添加到调用
             if openai_tools:
-                call_kwargs["tools"] = openai_tools
-                if openai_tool_choice is not None:
-                    call_kwargs["tool_choice"] = openai_tool_choice
-                # 调试：打印 Bash 工具的完整定义
-                for tool in openai_tools:
-                    if tool.get('function', {}).get('name') == 'Bash':
-                        self.logger.debug(f"Bash 工具完整定义: {json.dumps(tool, ensure_ascii=False)}")
-                        break
+                if disable_tools:
+                    self.logger.info("当前模型已启用禁用工具调用，已忽略 tools/tool_choice 参数")
+                else:
+                    call_kwargs["tools"] = openai_tools
+                    if openai_tool_choice is not None:
+                        call_kwargs["tool_choice"] = openai_tool_choice
+                    # 调试：打印 Bash 工具的完整定义
+                    for tool in openai_tools:
+                        if tool.get('function', {}).get('name') == 'Bash':
+                            self.logger.debug(f"Bash 工具完整定义: {json.dumps(tool, ensure_ascii=False)}")
+                            break
 
             # 调试：打印请求参数摘要
             self.logger.debug(f"API 请求: model={model_id}, stream={stream}, has_tools={bool(openai_tools)}, messages={len(openai_messages)}条")
@@ -287,7 +334,7 @@ class ProxyServer:
         """调用 API，失败时自动降级重试
 
         降级策略：
-        - tools 相关错误 → 去掉 tools 重试
+        - tools/tool_choice 相关错误 → 去掉 tools 和 tool_choice 重试
         - enable_thinking 相关错误 → 去掉 enable_thinking 重试
         - 流式错误（WebSocket/EOF）→ 非流式重试
 
@@ -295,19 +342,43 @@ class ProxyServer:
             (response, used_stream)
         """
         call_kwargs = call_kwargs.copy()
+        original_tools = call_kwargs.get("tools")
+        original_tool_choice = call_kwargs.get("tool_choice")
+
         try:
+            self.logger.debug(f"正在调用 API，has_tools={bool(original_tools)}")
             resp = self.client.chat.completions.create(**call_kwargs)
+            self.logger.debug(f"API 调用成功")
             return resp, stream
         except Exception as e:
             err_msg = str(e).lower()
 
+            # 详细记录原始错误
+            self.logger.error(f"API调用失败: {e}")
+
+            # 检测 unknown field 错误（老模型不支持某些参数）
+            if "unknown field" in err_msg:
+                self.logger.warning(f"检测到 unknown field 错误，可能是老模型不支持某些参数")
+
+                # 如果错误提到 tools 或 tool_choice，同时移除这两个参数
+                if ("tools" in err_msg or "tool_choice" in err_msg) and ("tools" in call_kwargs or "tool_choice" in call_kwargs):
+                    self.logger.warning(f"老模型不支持工具调用，移除 tools 和 tool_choice 参数后重试")
+                    call_kwargs.pop("tools", None)
+                    call_kwargs.pop("tool_choice", None)
+                    try:
+                        resp = self.client.chat.completions.create(**call_kwargs)
+                        self.logger.info("移除工具调用参数后重试成功")
+                        return resp, stream
+                    except Exception as retry_e:
+                        self.logger.error(f"移除工具调用参数后仍然失败: {retry_e}")
+                        raise
+
             # tool_choice 不兼容 → 降级为 auto / 移除后重试
             if "tool_choice" in err_msg and "tool_choice" in call_kwargs:
-                self.logger.warning("当前模型/网关不兼容 tool_choice，尝试降级重试")
-                original = call_kwargs.get("tool_choice")
+                self.logger.warning(f"tool_choice 不兼容（原始值: {original_tool_choice}），尝试降级")
 
                 retry_choices = []
-                if original != "auto":
+                if original_tool_choice != "auto":
                     retry_choices.append("auto")
                 retry_choices.append(None)  # 表示移除 tool_choice
 
@@ -315,36 +386,53 @@ class ProxyServer:
                     try:
                         if fallback_choice is None:
                             call_kwargs.pop("tool_choice", None)
+                            self.logger.info("已移除 tool_choice 参数，重试中...")
                         else:
                             call_kwargs["tool_choice"] = fallback_choice
+                            self.logger.info(f"已将 tool_choice 降级为 {fallback_choice}，重试中...")
                         resp = self.client.chat.completions.create(**call_kwargs)
+                        self.logger.info("tool_choice 降级重试成功")
                         return resp, stream
                     except Exception:
                         continue
-                # 所有降级都失败，继续走后续兜底逻辑
 
-            # tools 不支持 → 去掉 tools 重试
+            # tools 不支持 → 去掉 tools 和 tool_choice 重试
             if "tools" in err_msg and "tools" in call_kwargs:
-                self.logger.warning(f"模型不支持 tools，去掉 tools 重试")
+                self.logger.warning(f"模型不支持 tools，移除 tools 和 tool_choice 后重试")
                 call_kwargs.pop("tools", None)
                 call_kwargs.pop("tool_choice", None)
-                resp = self.client.chat.completions.create(**call_kwargs)
-                return resp, stream
+                try:
+                    resp = self.client.chat.completions.create(**call_kwargs)
+                    self.logger.info("移除 tools 参数后重试成功")
+                    return resp, stream
+                except Exception as retry_e:
+                    self.logger.error(f"移除 tools 参数后仍然失败: {retry_e}")
+                    raise
 
             # enable_thinking 不支持 → 去掉重试
             if "thinking" in err_msg and call_kwargs.get("extra_body", {}).get("enable_thinking"):
-                self.logger.warning(f"模型不支持 enable_thinking，去掉重试")
+                self.logger.warning(f"模型不支持 enable_thinking，移除后重试")
                 call_kwargs["extra_body"].pop("enable_thinking", None)
-                resp = self.client.chat.completions.create(**call_kwargs)
-                return resp, stream
+                try:
+                    resp = self.client.chat.completions.create(**call_kwargs)
+                    self.logger.info("移除 enable_thinking 后重试成功")
+                    return resp, stream
+                except Exception as retry_e:
+                    self.logger.error(f"移除 enable_thinking 后仍然失败: {retry_e}")
+                    raise
 
             # 流式错误（WebSocket/EOF）→ 非流式重试
             if stream and ("websocket" in err_msg or "eof" in err_msg or "1006" in err_msg):
                 self.logger.warning(f"流式传输失败，降级为非流式重试")
                 call_kwargs["stream"] = False
                 call_kwargs.pop("stream_options", None)
-                resp = self.client.chat.completions.create(**call_kwargs)
-                return resp, False
+                try:
+                    resp = self.client.chat.completions.create(**call_kwargs)
+                    self.logger.info("降级为非流式后重试成功")
+                    return resp, False
+                except Exception as retry_e:
+                    self.logger.error(f"降级为非流式后仍然失败: {retry_e}")
+                    raise
 
             raise
 

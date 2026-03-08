@@ -99,6 +99,16 @@ class ModelEditDialog(QDialog):
         self.enable_thinking_check.setToolTip("仅部分模型支持，开启后模型会进行更深入的推理思考")
         advanced_layout.addRow("", self.enable_thinking_check)
 
+        self.disable_tools_check = QCheckBox("禁用工具调用（兼容老模型）")
+        self.disable_tools_check.setChecked(False)
+        self.disable_tools_check.setToolTip("开启后将不再向模型发送 tools/tool_choice 参数")
+        advanced_layout.addRow("", self.disable_tools_check)
+
+        self.fix_host_header_check = QCheckBox("修复 Host 头签名问题")
+        self.fix_host_header_check.setChecked(False)
+        self.fix_host_header_check.setToolTip("如果遇到 HMAC 401 签名错误，尝试启用此选项")
+        advanced_layout.addRow("", self.fix_host_header_check)
+
         # 最大输出（下拉框 + 可编辑）
         self.max_tokens_input = QComboBox()
         self.max_tokens_input.setEditable(True)
@@ -143,6 +153,8 @@ class ModelEditDialog(QDialog):
         self.lora_id_input.setText(self.model.get("lora_id", "0"))
         self.search_disable_check.setChecked(self.model.get("search_disable", True))
         self.enable_thinking_check.setChecked(self.model.get("enable_thinking", False))
+        self.disable_tools_check.setChecked(self.model.get("disable_tools", False))
+        self.fix_host_header_check.setChecked(self.model.get("fix_host_header", False))
         # Max tokens - 如果值在预设中则选中，否则显示在编辑框
         max_tokens = str(self.model.get("max_tokens", 32768))
         self.max_tokens_input.setEditText(max_tokens)
@@ -179,6 +191,8 @@ class ModelEditDialog(QDialog):
             "lora_id": self.lora_id_input.text().strip() or "0",
             "search_disable": self.search_disable_check.isChecked(),
             "enable_thinking": self.enable_thinking_check.isChecked(),
+            "disable_tools": self.disable_tools_check.isChecked(),
+            "fix_host_header": self.fix_host_header_check.isChecked(),
             "max_tokens": max_tokens,
             "temperature": self.temperature_input.value()
         }
@@ -291,14 +305,16 @@ class ModelManageDialog(QDialog):
     def _load_models(self) -> None:
         """加载模型到列表"""
         self.model_list.clear()
+        target_name = self.selected_model_name or self.current_model_name
+
         for model in self.models:
             name = model.get("name", "未命名")
             item = QListWidgetItem(name)
             item.setData(Qt.UserRole, model)
             self.model_list.addItem(item)
 
-            # 选中当前模型
-            if name == self.current_model_name:
+            # 优先选中用户当前选择的模型，其次选中初始模型
+            if name == target_name:
                 self.model_list.setCurrentItem(item)
 
     def _on_selection_changed(self) -> None:
@@ -329,6 +345,8 @@ class ModelManageDialog(QDialog):
             model_data = dialog.get_model_data()
             if model_data:
                 self.models.append(model_data)
+                # 自动选择新添加的模型
+                self.selected_model_name = model_data.get("name")
                 self._load_models()
 
     def _edit_model(self) -> None:
@@ -345,10 +363,13 @@ class ModelManageDialog(QDialog):
             if model_data:
                 # 找到原模型并替换
                 old_name = model.get("name")
+                new_name = model_data.get("name")
                 for i, m in enumerate(self.models):
                     if m.get("name") == old_name:
                         self.models[i] = model_data
                         break
+                # 自动选择编辑后的模型
+                self.selected_model_name = new_name
                 self._load_models()
 
     def _delete_model(self) -> None:

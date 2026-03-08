@@ -37,7 +37,9 @@ class Config:
         "temperature": 0.7,
         "lora_id": "0",
         "search_disable": True,
-        "enable_thinking": False
+        "enable_thinking": False,
+        "disable_tools": False,
+        "fix_host_header": False
     }
 
     # 默认配置
@@ -52,7 +54,9 @@ class Config:
                 "temperature": 0.7,
                 "lora_id": "0",
                 "search_disable": True,
-                "enable_thinking": False
+                "enable_thinking": False,
+                "disable_tools": False,
+                "fix_host_header": False
             },
             {
                 "name": "GLM5",
@@ -63,7 +67,9 @@ class Config:
                 "temperature": 0.7,
                 "lora_id": "0",
                 "search_disable": True,
-                "enable_thinking": False
+                "enable_thinking": False,
+                "disable_tools": False,
+                "fix_host_header": False
             },
             {
                 "name": "Minimax M2.5",
@@ -74,7 +80,9 @@ class Config:
                 "temperature": 0.7,
                 "lora_id": "0",
                 "search_disable": True,
-                "enable_thinking": False
+                "enable_thinking": False,
+                "disable_tools": False,
+                "fix_host_header": False
             },
             {
                 "name": "讯飞星辰模型",
@@ -85,7 +93,9 @@ class Config:
                 "temperature": 0.7,
                 "lora_id": "0",
                 "search_disable": True,
-                "enable_thinking": False
+                "enable_thinking": False,
+                "disable_tools": False,
+                "fix_host_header": False
             }
         ],
         "current_model": "Kimi K2.5",
@@ -181,7 +191,9 @@ class Config:
                     "temperature": advanced.get("temperature", 0.7),
                     "lora_id": advanced.get("lora_id", "0"),
                     "search_disable": advanced.get("search_disable", True),
-                    "enable_thinking": False
+                    "enable_thinking": False,
+                    "disable_tools": advanced.get("disable_tools", False),
+                    "fix_host_header": advanced.get("fix_host_header", False)
                 }
             ],
             "current_model": "迁移的模型",
@@ -366,7 +378,8 @@ class Config:
                 "search_disable": model.get("search_disable", True),
                 "max_tokens": model.get("max_tokens", 4096),
                 "temperature": model.get("temperature", 0.7),
-                "enable_thinking": model.get("enable_thinking", False)
+                "enable_thinking": model.get("enable_thinking", False),
+                "disable_tools": model.get("disable_tools", False)
             },
             "proxy": self._config.get("proxy", {"host": "127.0.0.1", "port": 8080}).copy()
         }

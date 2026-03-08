@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.2-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-green)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 
@@ -78,22 +78,34 @@ python main.py
 
 ### 应用配置
 
-首次运行会自动生成 `config.json` 配置文件：
+首次运行会自动生成配置文件（位于 `~/.claude/ifly_code_settings.json`）：
 
 ```json
 {
-  "api": {
-    "api_key": "你的API Key",
-    "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
-    "model_id": "你的模型ID"
-  },
+  "models": [
+    {
+      "name": "Kimi K2.5",
+      "api_key": "你的API Key",
+      "base_url": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+      "model_id": "xopkimik25",
+      "max_tokens": 32768,
+      "temperature": 0.7,
+      "lora_id": "0",
+      "search_disable": true,
+      "enable_thinking": false,
+      "disable_tools": false,
+      "fix_host_header": false
+    }
+  ],
+  "current_model": "Kimi K2.5",
   "proxy": {
     "host": "127.0.0.1",
     "port": 8080
   },
-  "advanced": {
-    "lora_id": "0",
-    "search_disable": true
+  "app": {
+    "autostart": false,
+    "minimize_to_tray": true,
+    "log_level": "INFO"
   }
 }
 ```
@@ -102,9 +114,14 @@ python main.py
 
 | 参数 | 说明 |
 |------|------|
+| `name` | 模型显示名称 |
 | `api_key` | 讯飞星辰MaaS平台的API Key |
 | `base_url` | API请求地址（支持v1/v2） |
 | `model_id` | 模型ID |
+| `max_tokens` | 最大输出token数 |
+| `temperature` | 温度参数（0-1） |
+| `disable_tools` | 禁用工具调用（兼容老模型） |
+| `enable_thinking` | 启用思考模式 |
 | `port` | 本地代理监听端口 |
 
 ### Claude Code配置
@@ -194,6 +211,14 @@ $env:ANTHROPIC_MODEL="你的模型ID"
 ---
 
 ## 发布记录
+
+### 1.0.2 体验优化
+
+- 添加更新检查缓存机制，避免频繁网络请求（24小时缓存）
+- 模型编辑后自动选择，提升操作流畅度
+- 支持配置热重载，无需重启软件即可应用新配置
+- 增强工具调用兼容性，自动处理老模型不支持的参数
+- 修复 Host 头签名问题（可选配置）
 
 ### 1.0.1 稳定性增强
 
